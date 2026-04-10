@@ -1,8 +1,8 @@
 """
 ClawPump Telegram Bot
-- Auto detect cpk_ → launch atau earnings
-- Earnings: auto-detect agent dari API key (tanpa input ID)
-- 20 tema x 5 bg x 13 dekorasi x 5 badge = 1300+ kombinasi gambar
+- Auto detect cpk_ → launch
+- Earnings: auto-detect agentId via /api/agent/portfolio (tanpa input apapun)
+- 20 tema x 5 bg x 13 dekorasi x 5 badge
 """
 
 import os
@@ -34,7 +34,7 @@ CLAWPUMP_BASE = "https://clawpump.tech"
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Token data generators ────────────────────────────────────────────────────
+# ─── Token data ───────────────────────────────────────────────────────────────
 ADJECTIVES = [
     "Cosmic","Lunar","Solar","Quantum","Cyber","Digital","Neon","Turbo",
     "Ultra","Mega","Alpha","Nova","Stellar","Atomic","Hyper","Super",
@@ -57,11 +57,10 @@ DESCRIPTIONS = [
     "The most {adj_lower} token on Solana. {name} combines community, memes, and real utility.",
     "🚀 {name} launching on pump.fun. Be early, be {adj_lower}, be legendary.",
     "From the depths of the {adj_lower} universe comes {name}. The {noun_lower} revolution starts now.",
-    "{name} is not just a token — it's a movement. Join thousands of {noun_lower} believers on Solana.",
+    "{name} is not just a token — it's a movement. Join the {noun_lower} believers on Solana.",
     "Why settle for ordinary? {name} brings {adj_lower} energy to every trade on pump.fun.",
 ]
 
-# ─── Color themes ─────────────────────────────────────────────────────────────
 THEMES = [
     {"name":"fire",     "bg1":(40,5,0),   "bg2":(80,10,0),  "colors":[(255,80,0),(255,200,0),(220,30,0),(255,140,50),(200,60,0)]},
     {"name":"ocean",    "bg1":(0,8,40),   "bg2":(0,20,80),  "colors":[(0,150,255),(0,255,210),(40,90,200),(100,210,255),(0,180,180)]},
@@ -87,68 +86,52 @@ THEMES = [
 
 # ─── Image helpers ────────────────────────────────────────────────────────────
 
-def make_gradient(w, h, c1, c2, direction="vertical"):
-    c1 = np.array(c1, dtype=np.float32)
-    c2 = np.array(c2, dtype=np.float32)
-    if direction == "vertical":
-        t = np.linspace(0,1,h)[:,None,None]
-        arr = np.broadcast_to(c1*(1-t)+c2*t,(h,w,3)).copy()
-    elif direction == "horizontal":
-        t = np.linspace(0,1,w)[None,:,None]
-        arr = np.broadcast_to(c1*(1-t)+c2*t,(h,w,3)).copy()
-    elif direction == "diagonal":
-        ty = np.linspace(0,1,h)[:,None]
-        tx = np.linspace(0,1,w)[None,:]
-        t = ((ty+tx)/2)[:,:,None]
-        arr = c1*(1-t)+c2*t
-    else:  # radial
-        yy,xx = np.mgrid[0:h,0:w]
-        r = np.sqrt((xx-w//2)**2+(yy-h//2)**2)
-        mr = math.sqrt((w//2)**2+(h//2)**2)
-        t = np.clip(r/mr,0,1)[:,:,None]
-        arr = c1*(1-t)+c2*t
+def make_gradient(w,h,c1,c2,direction="vertical"):
+    c1=np.array(c1,dtype=np.float32); c2=np.array(c2,dtype=np.float32)
+    if direction=="vertical":
+        t=np.linspace(0,1,h)[:,None,None]; arr=np.broadcast_to(c1*(1-t)+c2*t,(h,w,3)).copy()
+    elif direction=="horizontal":
+        t=np.linspace(0,1,w)[None,:,None]; arr=np.broadcast_to(c1*(1-t)+c2*t,(h,w,3)).copy()
+    elif direction=="diagonal":
+        ty=np.linspace(0,1,h)[:,None]; tx=np.linspace(0,1,w)[None,:]
+        t=((ty+tx)/2)[:,:,None]; arr=c1*(1-t)+c2*t
+    else:
+        yy,xx=np.mgrid[0:h,0:w]; r=np.sqrt((xx-w//2)**2+(yy-h//2)**2)
+        t=np.clip(r/math.sqrt((w//2)**2+(h//2)**2),0,1)[:,:,None]; arr=c1*(1-t)+c2*t
     return Image.fromarray(arr.astype(np.uint8))
 
 def make_polygon(cx,cy,r,sides,rotation=0):
-    return [(cx+r*math.cos(2*math.pi*i/sides+rotation),
-             cy+r*math.sin(2*math.pi*i/sides+rotation)) for i in range(sides)]
+    return [(cx+r*math.cos(2*math.pi*i/sides+rotation),cy+r*math.sin(2*math.pi*i/sides+rotation)) for i in range(sides)]
 
 def make_star(cx,cy,r_out,r_in,n=5,rotation=-math.pi/2):
     pts=[]
     for i in range(n*2):
-        r=r_out if i%2==0 else r_in
-        a=math.pi*i/n+rotation
+        r=r_out if i%2==0 else r_in; a=math.pi*i/n+rotation
         pts.append((cx+r*math.cos(a),cy+r*math.sin(a)))
     return pts
 
 def draw_badge(draw,shape,cx,cy,r,fill):
-    if shape=="circle":
-        draw.ellipse([cx-r,cy-r,cx+r,cy+r],fill=fill)
-    elif shape=="hexagon":
-        draw.polygon(make_polygon(cx,cy,r,6,math.pi/6),fill=fill)
-    elif shape=="diamond":
-        draw.polygon(make_polygon(cx,cy,r,4,0),fill=fill)
-    elif shape=="shield":
-        draw.polygon(make_polygon(cx,cy-8,r,5,-math.pi/2),fill=fill)
-    elif shape=="rounded_rect":
-        draw.rounded_rectangle([cx-r,cy-r,cx+r,cy+r],radius=35,fill=fill)
+    if shape=="circle": draw.ellipse([cx-r,cy-r,cx+r,cy+r],fill=fill)
+    elif shape=="hexagon": draw.polygon(make_polygon(cx,cy,r,6,math.pi/6),fill=fill)
+    elif shape=="diamond": draw.polygon(make_polygon(cx,cy,r,4,0),fill=fill)
+    elif shape=="shield": draw.polygon(make_polygon(cx,cy-8,r,5,-math.pi/2),fill=fill)
+    elif shape=="rounded_rect": draw.rounded_rectangle([cx-r,cy-r,cx+r,cy+r],radius=35,fill=fill)
 
 def draw_outlined_text(draw,xy,text,font,fill,outline):
     x,y=xy
     for dx in [-2,-1,0,1,2]:
         for dy in [-2,-1,0,1,2]:
-            if dx!=0 or dy!=0:
-                draw.text((x+dx,y+dy),text,font=font,fill=outline)
+            if dx!=0 or dy!=0: draw.text((x+dx,y+dy),text,font=font,fill=outline)
     draw.text((x,y),text,font=font,fill=fill)
 
-def generate_token_data() -> dict:
+def generate_token_data():
     adj=random.choice(ADJECTIVES); noun=random.choice(NOUNS); suffix=random.choice(SUFFIXES)
     name=f"{adj} {noun}{suffix}"
     symbol=(adj[:3]+noun[:1]).upper() if random.random()>0.5 else (adj[:2]+noun[:2]).upper()
     desc=random.choice(DESCRIPTIONS).format(adj=adj,noun=noun,name=name,adj_lower=adj.lower(),noun_lower=noun.lower())
     return {"name":name,"symbol":symbol,"description":desc}
 
-def generate_token_image(name:str,symbol:str) -> BytesIO:
+def generate_token_image(name,symbol):
     SIZE=500; theme=random.choice(THEMES); colors=theme["colors"]
     bg_style=random.choice(["solid","vertical","horizontal","diagonal","radial"])
     img=Image.new("RGB",(SIZE,SIZE),theme["bg1"]) if bg_style=="solid" else make_gradient(SIZE,SIZE,theme["bg1"],theme["bg2"],direction=bg_style)
@@ -184,8 +167,7 @@ def generate_token_image(name:str,symbol:str) -> BytesIO:
                     else: draw.polygon([(x,y+sz),(x+sz//2,y),(x+sz,y+sz)],fill=c)
     elif style=="rings":
         cx,cy=SIZE//2,SIZE//2;step=random.randint(25,50)
-        for r in range(230,0,-step):
-            draw.ellipse([cx-r,cy-r,cx+r,cy+r],outline=random.choice(colors),width=random.randint(6,22))
+        for r in range(230,0,-step): draw.ellipse([cx-r,cy-r,cx+r,cy+r],outline=random.choice(colors),width=random.randint(6,22))
     elif style=="hex_grid":
         r=random.randint(28,55);h_dist=r*math.sqrt(3);v_dist=r*1.5;row_i=0;y=float(-r)
         while y<SIZE+r:
@@ -255,35 +237,32 @@ def generate_token_image(name:str,symbol:str) -> BytesIO:
     draw_badge(draw,badge_shape,SIZE//2,SIZE//2,badge_r+14,ring_color)
     badge_bg=tuple(max(c-15,0) for c in theme["bg1"])
     draw_badge(draw,badge_shape,SIZE//2,SIZE//2,badge_r,badge_bg)
-
     font_size=72 if len(symbol)<=4 else 56 if len(symbol)<=6 else 44
     try:
         f_big=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",font_size)
         f_sm=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",24)
     except Exception:
         f_big=f_sm=ImageFont.load_default()
-
     text_fill=random.choice(colors)
     bb=draw.textbbox((0,0),symbol,font=f_big);tw,th=bb[2]-bb[0],bb[3]-bb[1]
     draw_outlined_text(draw,((SIZE-tw)//2,(SIZE-th)//2-22),symbol,f_big,fill=text_fill,outline=badge_bg)
     display_name=name if len(name)<=22 else name[:20]+"…"
     bb2=draw.textbbox((0,0),display_name,font=f_sm);tw2=bb2[2]-bb2[0]
     draw.text(((SIZE-tw2)//2,308),display_name,fill="white",font=f_sm)
-
     buf=BytesIO();img.save(buf,format="PNG");buf.seek(0)
     return buf
 
 
 # ─── ClawPump API ─────────────────────────────────────────────────────────────
 
-def api_upload_image(buf:BytesIO):
+def api_upload_image(buf):
     try:
         r=requests.post(f"{CLAWPUMP_BASE}/api/upload",files={"image":("token.png",buf,"image/png")},timeout=30)
         d=r.json();return d.get("imageUrl") if d.get("success") else None
     except Exception as e:
-        logger.error("Upload error: %s",e);return None
+        logger.error("Upload: %s",e);return None
 
-def api_launch_token(api_key:str,token:dict,image_url:str) -> dict:
+def api_launch_token(api_key,token,image_url):
     try:
         r=requests.post(
             f"{CLAWPUMP_BASE}/api/launch",
@@ -291,54 +270,38 @@ def api_launch_token(api_key:str,token:dict,image_url:str) -> dict:
             headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},
             timeout=60,
         )
-        d=r.json();d["_status_code"]=r.status_code;return d
+        d=r.json();d["_sc"]=r.status_code;return d
     except Exception as e:
-        return {"success":False,"error":str(e),"_status_code":0}
+        return {"success":False,"error":str(e),"_sc":0}
 
-def api_get_agent_info(api_key:str) -> dict:
+def api_get_portfolio(api_key):
     """
-    Auto-detect agent ID dan info dari API key.
-    Coba beberapa endpoint, return dict dengan agentId jika berhasil.
+    GET /api/agent/portfolio — return agentId, username, wallet links.
+    Return 401 jika API key invalid.
     """
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    # Coba 1: check-wallet → return agent info lengkap untuk valid key
     try:
-        r = requests.get(f"{CLAWPUMP_BASE}/api/agent/spending/check-wallet", headers=headers, timeout=15)
-        d = r.json()
-        d["_status_code"] = r.status_code
-        if r.status_code == 200:
-            return d
-        if r.status_code == 401:
-            return {"error": "API key tidak valid", "_status_code": 401}
+        r=requests.get(
+            f"{CLAWPUMP_BASE}/api/agent/portfolio",
+            headers={"Authorization":f"Bearer {api_key}"},
+            timeout=15,
+        )
+        d=r.json();d["_sc"]=r.status_code;return d
     except Exception as e:
-        logger.error("check-wallet error: %s", e)
+        return {"error":str(e),"_sc":0}
 
-    # Coba 2: earnings tanpa agentId → mungkin server support bearer-only untuk key valid
-    try:
-        r = requests.get(f"{CLAWPUMP_BASE}/api/fees/earnings", headers=headers, timeout=15)
-        d = r.json()
-        d["_status_code"] = r.status_code
-        if r.status_code == 200 and d.get("agentId"):
-            return d
-    except Exception as e:
-        logger.error("earnings-bearer error: %s", e)
-
-    return {"error": "Tidak bisa ambil info agent", "_status_code": 0}
-
-def api_get_earnings(api_key:str, agent_id:str) -> dict:
+def api_get_earnings(api_key,agent_id):
     try:
         r=requests.get(
             f"{CLAWPUMP_BASE}/api/fees/earnings",
-            params={"agentId": agent_id},
-            headers={"Authorization": f"Bearer {api_key}"},
+            params={"agentId":agent_id},
+            headers={"Authorization":f"Bearer {api_key}"},
             timeout=20,
         )
-        d=r.json();d["_status_code"]=r.status_code;return d
+        d=r.json();d["_sc"]=r.status_code;return d
     except Exception as e:
-        return {"error":str(e),"_status_code":0}
+        return {"error":str(e),"_sc":0}
 
-def api_get_stats() -> dict:
+def api_get_stats():
     try:
         return requests.get(f"{CLAWPUMP_BASE}/api/stats",timeout=15).json()
     except Exception as e:
@@ -347,19 +310,14 @@ def api_get_stats() -> dict:
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def is_authorized(context:ContextTypes.DEFAULT_TYPE) -> bool:
-    return context.user_data.get("authorized",False)
+def is_authorized(ctx): return ctx.user_data.get("authorized",False)
+def set_expecting(ctx,state): ctx.user_data["expecting"]=state
+def get_expecting(ctx): return ctx.user_data.get("expecting")
 
-def set_expecting(context:ContextTypes.DEFAULT_TYPE,state):
-    context.user_data["expecting"]=state
-
-def get_expecting(context:ContextTypes.DEFAULT_TYPE):
-    return context.user_data.get("expecting")
-
-async def reject_unauthorized(update:Update):
+async def reject_unauthorized(update):
     await update.message.reply_text("🚫 *LU MAU NGAPAIN KESINI? MAKSA AMAT*",parse_mode="Markdown")
 
-async def show_menu(update:Update):
+async def show_menu(update):
     await update.message.reply_text(
         "✅ *Akses diberikan! Selamat datang.*\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -370,42 +328,40 @@ async def show_menu(update:Update):
         "  /help     — Bantuan\n"
         "  /cancel   — Batalkan operasi\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💡 *Shortcut:* Kirim `cpk_...` langsung → auto launch!\n"
-        "💡 Untuk earnings: /earnings lalu kirim `cpk_...`",
+        "💡 Kirim `cpk_...` langsung → auto launch!\n"
+        "💡 /earnings lalu kirim `cpk_...` → auto cek tanpa input ID",
         parse_mode="Markdown",
     )
 
 
 # ─── Commands ─────────────────────────────────────────────────────────────────
 
-async def cmd_start(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    if is_authorized(context): await show_menu(update); return
-    set_expecting(context,"access_code")
-    await update.message.reply_text("🔐 *Masukkan kode akses untuk melanjutkan:*",parse_mode="Markdown")
+async def cmd_start(update,ctx):
+    if is_authorized(ctx): await show_menu(update); return
+    set_expecting(ctx,"access_code")
+    await update.message.reply_text("🔐 *Masukkan kode akses:*",parse_mode="Markdown")
 
-async def cmd_cancel(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    set_expecting(context,None)
+async def cmd_cancel(update,ctx):
+    set_expecting(ctx,None)
     await update.message.reply_text("❌ Dibatalkan.")
 
-async def cmd_launch(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(context): await reject_unauthorized(update); return
-    set_expecting(context,None)
+async def cmd_launch(update,ctx):
+    if not is_authorized(ctx): await reject_unauthorized(update); return
+    set_expecting(ctx,None)
     await update.message.reply_text(
-        "🔑 *Kirim API key kamu* (format: `cpk_...`)\n\n"
-        "Bot langsung launch setelah menerima key.\n"
-        "Atau /cancel untuk batal.",parse_mode="Markdown")
+        "🔑 *Kirim API key kamu* (`cpk_...`)\n\nBot langsung launch. /cancel untuk batal.",
+        parse_mode="Markdown")
 
-async def cmd_earnings(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(context): await reject_unauthorized(update); return
-    set_expecting(context,"api_key_earnings")
+async def cmd_earnings(update,ctx):
+    if not is_authorized(ctx): await reject_unauthorized(update); return
+    set_expecting(ctx,"api_key_earnings")
     await update.message.reply_text(
-        "🔑 *Kirim API key kamu* (format: `cpk_...`)\n\n"
-        "Bot akan otomatis detect agent & tampilkan semua detail.\n"
-        "Atau /cancel untuk batal.",parse_mode="Markdown")
+        "🔑 *Kirim API key kamu* (`cpk_...`)\n\nBot auto-detect agent & tampilkan semua info. /cancel untuk batal.",
+        parse_mode="Markdown")
 
-async def cmd_stats(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(context): await reject_unauthorized(update); return
-    set_expecting(context,None)
+async def cmd_stats(update,ctx):
+    if not is_authorized(ctx): await reject_unauthorized(update); return
+    set_expecting(ctx,None)
     msg=await update.message.reply_text("⏳ Mengambil statistik...")
     result=await asyncio.get_event_loop().run_in_executor(None,api_get_stats)
     if "error" in result:
@@ -419,35 +375,34 @@ async def cmd_stats(update:Update,context:ContextTypes.DEFAULT_TYPE):
         f"📈 Volume 24h:     `${result.get('totalVolume24h',0):,.0f}`\n"
         f"━━━━━━━━━━━━━━━━━━━━",parse_mode="Markdown")
 
-async def cmd_help(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(context): await reject_unauthorized(update); return
-    set_expecting(context,None)
+async def cmd_help(update,ctx):
+    if not is_authorized(ctx): await reject_unauthorized(update); return
+    set_expecting(ctx,None)
     await update.message.reply_text(
         "🆘 *Panduan ClawPump Bot*\n\n"
-        "🚀 *Launch (2 cara):*\n"
-        "  1. Ketik /launch → kirim `cpk_...`\n"
-        "  2. Langsung kirim `cpk_...` → auto launch!\n\n"
-        "💰 *Cek Earnings & Detail Agent:*\n"
-        "  Ketik /earnings → kirim `cpk_...`\n"
-        "  _(Bot otomatis ambil semua info dari API key)_\n\n"
+        "🚀 *Launch:*\n"
+        "  • Ketik /launch → kirim `cpk_...`\n"
+        "  • Atau langsung kirim `cpk_...` → auto launch!\n\n"
+        "💰 *Cek Earnings:*\n"
+        "  • Ketik /earnings → kirim `cpk_...`\n"
+        "  • Bot otomatis detect agent & tampilkan detail\n\n"
         "📊 /stats — Statistik platform\n"
-        "❌ /cancel — Batalkan operasi\n\n"
+        "❌ /cancel — Batalkan\n\n"
         "💡 API key: [clawpump.tech](https://clawpump.tech) → login Google",
         parse_mode="Markdown",disable_web_page_preview=True)
 
 
-# ─── Message handler utama ────────────────────────────────────────────────────
+# ─── Message handler ──────────────────────────────────────────────────────────
 
-async def handle_text(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def handle_text(update,ctx):
     text=update.message.text.strip()
-    expecting=get_expecting(context)
+    expecting=get_expecting(ctx)
 
-    # Belum authorized
-    if not is_authorized(context):
+    if not is_authorized(ctx):
         if expecting=="access_code":
             if text==ACCESS_CODE:
-                context.user_data["authorized"]=True
-                set_expecting(context,None)
+                ctx.user_data["authorized"]=True
+                set_expecting(ctx,None)
                 await show_menu(update)
             else:
                 await update.message.reply_text("🚫 *LU MAU NGAPAIN KESINI? MAKSA AMAT*",parse_mode="Markdown")
@@ -457,35 +412,27 @@ async def handle_text(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
     # Auto detect cpk_
     if text.startswith("cpk_"):
-        try:
-            await update.message.delete()
-        except Exception:
-            pass
-        mode = expecting if expecting == "api_key_earnings" else "launch"
-        set_expecting(context, None)
-        if mode == "api_key_earnings":
-            await do_earnings(update, context, text)
+        try: await update.message.delete()
+        except Exception: pass
+        mode=expecting if expecting=="api_key_earnings" else "launch"
+        set_expecting(ctx,None)
+        if mode=="api_key_earnings":
+            await do_earnings(update,ctx,text)
         else:
-            await do_launch(update, context, text)
+            await do_launch(update,ctx,text)
         return
 
-    # Tidak ada state
     if not expecting:
-        await update.message.reply_text(
-            "Kirim `cpk_...` untuk launch, atau /earnings untuk cek earnings.",
-            parse_mode="Markdown")
+        await update.message.reply_text("Kirim `cpk_...` untuk launch, atau /earnings untuk cek earnings.",parse_mode="Markdown")
         return
 
-    # Format salah saat menunggu API key
-    if expecting == "api_key_earnings":
-        await update.message.reply_text(
-            "❌ Format salah. API key harus diawali `cpk_`\nCoba lagi atau /cancel",
-            parse_mode="Markdown")
+    if expecting=="api_key_earnings":
+        await update.message.reply_text("❌ Format salah. Harus diawali `cpk_`\nCoba lagi atau /cancel",parse_mode="Markdown")
 
 
-# ─── Proses launch ────────────────────────────────────────────────────────────
+# ─── Launch ───────────────────────────────────────────────────────────────────
 
-async def do_launch(update:Update,context:ContextTypes.DEFAULT_TYPE,api_key:str):
+async def do_launch(update,ctx,api_key):
     msg=await update.message.reply_text("⏳ *Generating token...*",parse_mode="Markdown")
     token=generate_token_data()
     image_buf=generate_token_image(token["name"],token["symbol"])
@@ -505,12 +452,10 @@ async def do_launch(update:Update,context:ContextTypes.DEFAULT_TYPE,api_key:str)
     if not image_url:
         await msg.edit_text("❌ *Gagal upload gambar!*\nCoba lagi nanti.",parse_mode="Markdown");return
 
-    await msg.edit_text(
-        f"✅ Gambar uploaded!\n\n⏳ Launching *{token['name']}* ke pump.fun...\n_(10–30 detik)_",
-        parse_mode="Markdown")
+    await msg.edit_text(f"✅ Gambar uploaded!\n\n⏳ Launching *{token['name']}* ke pump.fun...\n_(10–30 detik)_",parse_mode="Markdown")
 
     result=await asyncio.get_event_loop().run_in_executor(None,api_launch_token,api_key,token,image_url)
-    sc=result.get("_status_code",0)
+    sc=result.get("_sc",0)
 
     if result.get("success"):
         mint=result.get("mintAddress","N/A");tx=result.get("txHash","N/A")
@@ -537,92 +482,69 @@ async def do_launch(update:Update,context:ContextTypes.DEFAULT_TYPE,api_key:str)
         sol=result.get("suggestions",{}).get("paymentFallback",{}).get("selfFunded",{}).get("amountSol",0.03)
         await msg.edit_text(f"⚠️ *Gasless Tidak Tersedia*\n\nCoba lagi nanti atau pakai Self-Funded ({sol} SOL).",parse_mode="Markdown")
     elif sc==400:
-        await msg.edit_text(f"❌ *Validasi Gagal!*\n\n`{result.get('details',result.get('error','Error'))}`",parse_mode="Markdown")
+        await msg.edit_text(f"❌ *Validasi Gagal!*\n\n`{result.get('details',result.get('error',''))}`",parse_mode="Markdown")
     else:
         err=result.get("message") or result.get("error") or "Unknown error"
         await msg.edit_text(f"❌ *Launch Gagal!*\n\nStatus: `{sc}`\nError: `{err}`",parse_mode="Markdown")
 
 
-# ─── Proses earnings ──────────────────────────────────────────────────────────
+# ─── Earnings (fully auto via /api/agent/portfolio) ───────────────────────────
 
-async def do_earnings(update:Update,context:ContextTypes.DEFAULT_TYPE,api_key:str):
-    msg=await update.message.reply_text("🔍 *Mencari info agent dari API key...*",parse_mode="Markdown")
+async def do_earnings(update,ctx,api_key):
+    msg=await update.message.reply_text("🔍 *Auto-detecting agent dari API key...*",parse_mode="Markdown")
 
-    # Step 1: Auto-detect agent info dari API key
-    agent_info=await asyncio.get_event_loop().run_in_executor(None,api_get_agent_info,api_key)
-    sc=agent_info.get("_status_code",0)
+    # Step 1: GET /api/agent/portfolio → return agentId, username, dll
+    portfolio=await asyncio.get_event_loop().run_in_executor(None,api_get_portfolio,api_key)
+    sc=portfolio.get("_sc",0)
 
-    if sc==401 or agent_info.get("error"):
-        err=agent_info.get("error","API key tidak valid")
-        await msg.edit_text(
-            f"❌ *Gagal detect agent!*\n\n`{err}`\n\nPastikan API key kamu valid dari clawpump.tech",
-            parse_mode="Markdown");return
+    if sc==401:
+        await msg.edit_text("❌ *API Key tidak valid!*\n\nPastikan API key benar dari clawpump.tech",parse_mode="Markdown");return
+    if sc==0 or "error" in portfolio:
+        await msg.edit_text(f"❌ *Gagal connect ke ClawPump!*\n\n`{portfolio.get('error','Connection error')}`",parse_mode="Markdown");return
 
-    # Ambil agentId dari berbagai kemungkinan field
-    agent_id = (
-        agent_info.get("agentId") or
-        agent_info.get("agent_id") or
-        agent_info.get("agent", {}).get("agentId") if isinstance(agent_info.get("agent"), dict) else None or
-        agent_info.get("id")
-    )
+    agent_id  = portfolio.get("agentId") or portfolio.get("agent_id")
+    username  = portfolio.get("username") or portfolio.get("name") or agent_id
+    wallet    = portfolio.get("walletAddress") or portfolio.get("wallet") or "N/A"
 
     if not agent_id:
-        # Kalau check-wallet berhasil tapi tidak ada agentId, tampilkan info yang ada
         await msg.edit_text(
-            f"⚠️ *Agent terdeteksi tapi ID tidak ditemukan.*\n\n"
-            f"Info yang tersedia:\n"
-            f"```\n{str(agent_info)[:300]}\n```\n\n"
-            f"Hubungi support clawpump.tech untuk Agent ID kamu.",
-            parse_mode="Markdown");return
+            f"⚠️ *Agent terdeteksi tapi agentId tidak ditemukan.*\n\n"
+            f"Response:\n`{str(portfolio)[:300]}`\n\n"
+            f"Hubungi support di [clawpump.tech](https://clawpump.tech)",
+            parse_mode="Markdown",disable_web_page_preview=True);return
 
-    await msg.edit_text(
-        f"✅ Agent ditemukan: `{agent_id}`\n\n⏳ Mengambil earnings...",
-        parse_mode="Markdown")
+    await msg.edit_text(f"✅ Agent: `{agent_id}`\n\n⏳ Mengambil earnings...",parse_mode="Markdown")
 
-    # Step 2: Ambil earnings
+    # Step 2: GET /api/fees/earnings
     earnings=await asyncio.get_event_loop().run_in_executor(None,api_get_earnings,api_key,agent_id)
-    esc=earnings.get("_status_code",0)
+    esc=earnings.get("_sc",0)
 
     if esc==401 or (esc!=200 and "error" in earnings):
-        await msg.edit_text(
-            f"❌ *Gagal mengambil earnings!*\n\n`{earnings.get('error','Error')}`",
-            parse_mode="Markdown");return
+        await msg.edit_text(f"❌ *Gagal ambil earnings!*\n\n`{earnings.get('error','Error')}`",parse_mode="Markdown");return
 
-    # Ambil data agent dari check-wallet response
-    wallet_addr = (
-        agent_info.get("walletAddress") or
-        agent_info.get("wallet") or
-        agent_info.get("address") or "N/A"
-    )
-    lobster_mode = agent_info.get("spendingMode") or agent_info.get("lobsterEnabled")
-    agent_name   = agent_info.get("agentName") or agent_info.get("name") or agent_id
+    total_earned  = earnings.get("totalEarned",0)
+    total_sent    = earnings.get("totalSent",0)
+    total_pending = earnings.get("totalPending",0)
+    total_held    = earnings.get("totalHeld",0)
+    tokens        = earnings.get("tokenBreakdown",[])
 
-    total_earned  = earnings.get("totalEarned", 0)
-    total_sent    = earnings.get("totalSent", 0)
-    total_pending = earnings.get("totalPending", 0)
-    total_held    = earnings.get("totalHeld", 0)
-    tokens        = earnings.get("tokenBreakdown", [])
-
-    # Token breakdown (max 5)
     token_lines=""
     for t in tokens[:5]:
         mint=t.get("mintAddress","N/A")
-        short_mint=mint[:8]+"..."+mint[-4:] if len(mint)>12 else mint
-        total_col=t.get("totalCollected",0)
+        short=mint[:8]+"..."+mint[-4:] if len(mint)>12 else mint
         share=t.get("totalAgentShare",0)
-        token_lines+=f"  • `{short_mint}`\n    Collected: {total_col:.4f} | Kamu: {share:.4f} SOL\n"
+        collected=t.get("totalCollected",0)
+        token_lines+=f"  • `{short}`\n    Collected: `{collected:.4f}` | Kamu: `{share:.4f}` SOL\n"
+
+    # Format wallet
+    wallet_display=f"`{wallet[:16]}...{wallet[-6:]}`" if len(wallet)>22 else f"`{wallet}`"
 
     text=(
         f"👤 *Detail Agent*\n\n"
-        f"🆔 Agent ID:  `{agent_id}`\n"
-        f"📛 Name:      `{agent_name}`\n"
-        f"💳 Wallet:    `{wallet_addr[:16]}...{wallet_addr[-6:] if len(wallet_addr)>22 else wallet_addr}`\n"
-    )
-    if lobster_mode is not None:
-        text+=f"🦞 Lobster:   `{'aktif' if lobster_mode else 'tidak aktif'}`\n"
-
-    text+=(
-        f"\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 Agent ID: `{agent_id}`\n"
+        f"📛 Username: `{username}`\n"
+        f"💳 Wallet:   {wallet_display}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 *Earnings*\n\n"
         f"✅ Total Earned:  `{total_earned:.4f} SOL`\n"
         f"📤 Total Sent:    `{total_sent:.4f} SOL`\n"
@@ -634,9 +556,8 @@ async def do_earnings(update:Update,context:ContextTypes.DEFAULT_TYPE,api_key:st
         text+=f"\n📊 *Token Breakdown ({len(tokens)} token):*\n{token_lines}"
     text+="\n_Fee dikumpulkan tiap jam & otomatis ke wallet kamu._"
 
-    # Tombol link ke dashboard
     keyboard=InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Dashboard Agent", url=f"https://clawpump.tech/agent/{agent_id}")],
+        [InlineKeyboardButton("📊 Dashboard Agent",url=f"https://clawpump.tech/agent/{agent_id}")],
     ])
     await msg.edit_text(text,parse_mode="Markdown",reply_markup=keyboard)
 
@@ -644,8 +565,7 @@ async def do_earnings(update:Update,context:ContextTypes.DEFAULT_TYPE,api_key:st
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN tidak ditemukan!")
+    if not BOT_TOKEN: raise ValueError("BOT_TOKEN tidak ditemukan!")
     app=Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",    cmd_start))
     app.add_handler(CommandHandler("launch",   cmd_launch))
