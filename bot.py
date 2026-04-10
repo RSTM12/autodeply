@@ -1,7 +1,9 @@
 """
 ClawPump Telegram Bot
-- Auto detect cpk_ key → langsung launch
-- Gambar random dengan tema & bentuk bervariasi
+- Auto detect cpk_ → langsung launch
+- 20 tema warna x 5 background x 13 dekorasi x 5 badge = 1300+ kombinasi gambar
+- Kode akses wajib
+- API key tidak disimpan
 """
 
 import os
@@ -10,6 +12,7 @@ import random
 import asyncio
 import requests
 import logging
+import numpy as np
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
@@ -32,18 +35,20 @@ CLAWPUMP_BASE = "https://clawpump.tech"
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Token generators ─────────────────────────────────────────────────────────
+# ─── Token data generators ────────────────────────────────────────────────────
 ADJECTIVES = [
-    "Cosmic", "Lunar", "Solar", "Quantum", "Cyber", "Digital", "Neon",
-    "Turbo", "Ultra", "Mega", "Alpha", "Nova", "Stellar", "Atomic",
-    "Hyper", "Super", "Galactic", "Mystic", "Shadow", "Phantom",
+    "Cosmic","Lunar","Solar","Quantum","Cyber","Digital","Neon","Turbo",
+    "Ultra","Mega","Alpha","Nova","Stellar","Atomic","Hyper","Super",
+    "Galactic","Mystic","Shadow","Phantom","Blazing","Frozen","Ancient",
+    "Electric","Thunder","Silent","Golden","Crystal","Crimson","Emerald",
 ]
 NOUNS = [
-    "Ape", "Cat", "Dog", "Fox", "Wolf", "Bear", "Eagle", "Shark",
-    "Dragon", "Tiger", "Lion", "Panda", "Rocket", "Moon", "Star",
-    "Gem", "Gold", "Diamond", "Crystal", "Phoenix",
+    "Ape","Cat","Dog","Fox","Wolf","Bear","Eagle","Shark","Dragon","Tiger",
+    "Lion","Panda","Rocket","Moon","Star","Gem","Gold","Diamond","Crystal",
+    "Phoenix","Cobra","Hawk","Rhino","Whale","Panther","Viper","Jaguar",
+    "Titan","Oracle","Spectre",
 ]
-SUFFIXES = ["", " DAO", " Finance", " Protocol", " Network", ""]
+SUFFIXES = ["", " DAO", " Finance", " Protocol", " Network", "", " Labs", " X"]
 DESCRIPTIONS = [
     "The ultimate {adj} {noun} token on Solana. Join the revolution and ride the wave to the moon!",
     "{name} is the next-gen meme token powering the {adj_lower} economy on Solana.",
@@ -52,40 +57,97 @@ DESCRIPTIONS = [
     "{name}: Where {adj_lower} meets DeFi. The future is {noun_lower}.",
     "The most {adj_lower} token on Solana. {name} combines community, memes, and real utility.",
     "🚀 {name} launching on pump.fun. Be early, be {adj_lower}, be legendary.",
+    "From the depths of the {adj_lower} universe comes {name}. The {noun_lower} revolution starts now.",
+    "{name} is not just a token — it's a movement. Join thousands of {noun_lower} believers on Solana.",
+    "Why settle for ordinary? {name} brings {adj_lower} energy to every trade on pump.fun.",
 ]
 
-# ─── Color themes ─────────────────────────────────────────────────────────────
+# ─── Color themes (20 tema) ───────────────────────────────────────────────────
 THEMES = [
-    {"name": "fire",   "bg": (25, 5, 0),    "colors": [(255,80,0),(255,200,0),(220,30,0),(255,140,50),(200,60,0)]},
-    {"name": "ocean",  "bg": (0, 8, 40),    "colors": [(0,150,255),(0,255,210),(40,90,200),(100,210,255),(0,180,180)]},
-    {"name": "forest", "bg": (5, 25, 5),    "colors": [(0,200,60),(120,190,0),(40,160,40),(180,255,80),(0,140,70)]},
-    {"name": "purple", "bg": (15, 0, 30),   "colors": [(180,0,255),(255,0,180),(120,0,220),(255,80,255),(100,0,180)]},
-    {"name": "gold",   "bg": (20, 12, 0),   "colors": [(255,210,0),(255,165,0),(210,140,0),(255,235,80),(180,130,0)]},
-    {"name": "cyber",  "bg": (0, 18, 18),   "colors": [(0,255,200),(0,210,255),(40,255,140),(0,255,120),(50,200,200)]},
-    {"name": "sunset", "bg": (28, 5, 18),   "colors": [(255,90,40),(200,40,100),(255,160,0),(160,0,110),(255,60,80)]},
-    {"name": "ice",    "bg": (5, 14, 28),   "colors": [(140,215,255),(200,240,255),(90,175,255),(225,248,255),(100,190,240)]},
-    {"name": "lava",   "bg": (30, 0, 0),    "colors": [(255,50,0),(255,120,0),(200,0,0),(255,180,0),(150,0,0)]},
-    {"name": "mint",   "bg": (0, 22, 18),   "colors": [(0,255,180),(80,255,200),(0,200,150),(150,255,220),(0,230,160)]},
-    {"name": "rose",   "bg": (28, 5, 15),   "colors": [(255,80,120),(255,150,180),(200,40,80),(255,200,210),(180,20,80)]},
-    {"name": "matrix", "bg": (0, 12, 0),    "colors": [(0,255,0),(0,200,0),(50,255,50),(0,180,0),(100,255,100)]},
+    {"name":"fire",     "bg1":(40,5,0),   "bg2":(80,10,0),  "colors":[(255,80,0),(255,200,0),(220,30,0),(255,140,50),(200,60,0)]},
+    {"name":"ocean",    "bg1":(0,8,40),   "bg2":(0,20,80),  "colors":[(0,150,255),(0,255,210),(40,90,200),(100,210,255),(0,180,180)]},
+    {"name":"forest",   "bg1":(5,25,5),   "bg2":(10,50,10), "colors":[(0,200,60),(120,190,0),(40,160,40),(180,255,80),(0,140,70)]},
+    {"name":"purple",   "bg1":(15,0,30),  "bg2":(30,0,60),  "colors":[(180,0,255),(255,0,180),(120,0,220),(255,80,255),(100,0,180)]},
+    {"name":"gold",     "bg1":(20,12,0),  "bg2":(45,28,0),  "colors":[(255,210,0),(255,165,0),(210,140,0),(255,235,80),(180,130,0)]},
+    {"name":"cyber",    "bg1":(0,18,18),  "bg2":(0,35,35),  "colors":[(0,255,200),(0,210,255),(40,255,140),(0,255,120),(50,200,200)]},
+    {"name":"sunset",   "bg1":(28,5,18),  "bg2":(60,10,35), "colors":[(255,90,40),(200,40,100),(255,160,0),(160,0,110),(255,60,80)]},
+    {"name":"ice",      "bg1":(5,14,28),  "bg2":(10,28,55), "colors":[(140,215,255),(200,240,255),(90,175,255),(225,248,255),(100,190,240)]},
+    {"name":"lava",     "bg1":(30,0,0),   "bg2":(65,5,0),   "colors":[(255,50,0),(255,120,0),(200,0,0),(255,180,0),(150,0,0)]},
+    {"name":"mint",     "bg1":(0,22,18),  "bg2":(0,45,32),  "colors":[(0,255,180),(80,255,200),(0,200,150),(150,255,220),(0,230,160)]},
+    {"name":"rose",     "bg1":(28,5,15),  "bg2":(55,10,28), "colors":[(255,80,120),(255,150,180),(200,40,80),(255,200,210),(180,20,80)]},
+    {"name":"matrix",   "bg1":(0,12,0),   "bg2":(0,25,0),   "colors":[(0,255,0),(0,200,0),(50,255,50),(0,180,0),(100,255,100)]},
+    {"name":"toxic",    "bg1":(5,20,0),   "bg2":(15,40,5),  "colors":[(100,255,0),(180,255,0),(50,200,0),(220,255,50),(0,180,0)]},
+    {"name":"blood",    "bg1":(20,0,0),   "bg2":(45,0,0),   "colors":[(200,0,0),(255,0,50),(150,0,0),(255,50,50),(180,20,0)]},
+    {"name":"space",    "bg1":(0,0,15),   "bg2":(5,0,35),   "colors":[(100,0,255),(0,100,255),(50,0,200),(200,100,255),(0,150,255)]},
+    {"name":"arctic",   "bg1":(8,15,25),  "bg2":(15,28,50), "colors":[(200,230,255),(150,200,255),(255,255,255),(180,210,240),(120,180,255)]},
+    {"name":"desert",   "bg1":(35,22,5),  "bg2":(65,42,10), "colors":[(255,180,80),(220,140,50),(255,220,100),(200,120,30),(255,200,120)]},
+    {"name":"neon",     "bg1":(5,0,12),   "bg2":(12,0,22),  "colors":[(255,0,255),(0,255,255),(255,255,0),(0,255,0),(255,0,128)]},
+    {"name":"volcano",  "bg1":(25,5,0),   "bg2":(55,10,0),  "colors":[(255,100,0),(255,60,0),(200,40,0),(255,180,50),(150,20,0)]},
+    {"name":"electric", "bg1":(0,5,20),   "bg2":(5,10,40),  "colors":[(0,200,255),(100,220,255),(0,150,255),(50,255,200),(0,180,200)]},
 ]
+
+# ─── Image helpers ────────────────────────────────────────────────────────────
+
+def make_gradient(w, h, c1, c2, direction="vertical"):
+    c1 = np.array(c1, dtype=np.float32)
+    c2 = np.array(c2, dtype=np.float32)
+    if direction == "vertical":
+        t   = np.linspace(0, 1, h)[:, None, None]
+        arr = np.broadcast_to(c1*(1-t) + c2*t, (h, w, 3)).copy()
+    elif direction == "horizontal":
+        t   = np.linspace(0, 1, w)[None, :, None]
+        arr = np.broadcast_to(c1*(1-t) + c2*t, (h, w, 3)).copy()
+    elif direction == "diagonal":
+        ty  = np.linspace(0, 1, h)[:, None]
+        tx  = np.linspace(0, 1, w)[None, :]
+        t   = ((ty + tx) / 2)[:, :, None]
+        arr = c1*(1-t) + c2*t
+    else:  # radial
+        yy, xx = np.mgrid[0:h, 0:w]
+        r   = np.sqrt((xx - w//2)**2 + (yy - h//2)**2)
+        mr  = math.sqrt((w//2)**2 + (h//2)**2)
+        t   = np.clip(r/mr, 0, 1)[:, :, None]
+        arr = c1*(1-t) + c2*t
+    return Image.fromarray(arr.astype(np.uint8))
 
 
 def make_polygon(cx, cy, r, sides, rotation=0):
-    points = []
-    for i in range(sides):
-        angle = 2 * math.pi * i / sides + rotation
-        points.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
-    return points
+    return [
+        (cx + r*math.cos(2*math.pi*i/sides + rotation),
+         cy + r*math.sin(2*math.pi*i/sides + rotation))
+        for i in range(sides)
+    ]
 
 
-def make_star(cx, cy, r_out, r_in, points_count=5, rotation=0):
-    points = []
-    for i in range(points_count * 2):
-        r = r_out if i % 2 == 0 else r_in
-        angle = math.pi * i / points_count + rotation - math.pi / 2
-        points.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
-    return points
+def make_star(cx, cy, r_out, r_in, n=5, rotation=-math.pi/2):
+    pts = []
+    for i in range(n*2):
+        r = r_out if i%2==0 else r_in
+        a = math.pi*i/n + rotation
+        pts.append((cx + r*math.cos(a), cy + r*math.sin(a)))
+    return pts
+
+
+def draw_badge(draw, shape, cx, cy, r, fill):
+    if shape == "circle":
+        draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill=fill)
+    elif shape == "hexagon":
+        draw.polygon(make_polygon(cx, cy, r, 6, math.pi/6), fill=fill)
+    elif shape == "diamond":
+        draw.polygon(make_polygon(cx, cy, r, 4, 0), fill=fill)
+    elif shape == "shield":
+        draw.polygon(make_polygon(cx, cy-8, r, 5, -math.pi/2), fill=fill)
+    elif shape == "rounded_rect":
+        draw.rounded_rectangle([cx-r, cy-r, cx+r, cy+r], radius=35, fill=fill)
+
+
+def draw_outlined_text(draw, xy, text, font, fill, outline):
+    x, y = xy
+    for dx in [-2,-1,0,1,2]:
+        for dy in [-2,-1,0,1,2]:
+            if dx != 0 or dy != 0:
+                draw.text((x+dx, y+dy), text, font=font, fill=outline)
+    draw.text((x, y), text, font=font, fill=fill)
 
 
 def generate_token_data() -> dict:
@@ -93,7 +155,7 @@ def generate_token_data() -> dict:
     noun   = random.choice(NOUNS)
     suffix = random.choice(SUFFIXES)
     name   = f"{adj} {noun}{suffix}"
-    symbol = (adj[:3] + noun[:1]).upper() if random.random() > 0.5 else (adj[:2] + noun[:2]).upper()
+    symbol = (adj[:3]+noun[:1]).upper() if random.random()>0.5 else (adj[:2]+noun[:2]).upper()
     desc   = random.choice(DESCRIPTIONS).format(
         adj=adj, noun=noun, name=name,
         adj_lower=adj.lower(), noun_lower=noun.lower(),
@@ -102,118 +164,213 @@ def generate_token_data() -> dict:
 
 
 def generate_token_image(name: str, symbol: str) -> BytesIO:
+    SIZE   = 500
     theme  = random.choice(THEMES)
-    style  = random.choice(["circles", "polygons", "stars", "burst", "mosaic", "rings", "mixed"])
     colors = theme["colors"]
-    bg     = theme["bg"]
 
-    img  = Image.new("RGB", (500, 500), color=bg)
+    # Background
+    bg_style = random.choice(["solid","vertical","horizontal","diagonal","radial"])
+    if bg_style == "solid":
+        img = Image.new("RGB", (SIZE, SIZE), theme["bg1"])
+    else:
+        img = make_gradient(SIZE, SIZE, theme["bg1"], theme["bg2"], direction=bg_style)
     draw = ImageDraw.Draw(img)
 
-    # ── Draw decorative background shapes ────────────────────────────────────
+    # Decoration
+    style = random.choice([
+        "circles","polygons","stars","burst","mosaic",
+        "rings","hex_grid","stripes","confetti","waves",
+        "lightning","triangles","mixed",
+    ])
+
     if style == "circles":
-        for _ in range(12):
-            cx, cy = random.randint(-50, 550), random.randint(-50, 550)
-            r = random.randint(25, 160)
-            draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill=random.choice(colors))
+        for _ in range(random.randint(8,15)):
+            cx = random.randint(-40, SIZE+40)
+            cy = random.randint(-40, SIZE+40)
+            r  = random.randint(20, 160)
+            draw.ellipse([cx-r,cy-r,cx+r,cy+r], fill=random.choice(colors))
 
     elif style == "polygons":
-        for _ in range(10):
-            cx, cy = random.randint(20, 480), random.randint(20, 480)
-            r      = random.randint(40, 130)
-            sides  = random.choice([3, 4, 5, 6, 8])
-            rot    = random.uniform(0, math.pi)
-            pts    = make_polygon(cx, cy, r, sides, rot)
-            draw.polygon(pts, fill=random.choice(colors))
+        for _ in range(random.randint(7,12)):
+            cx,cy = random.randint(10,SIZE-10), random.randint(10,SIZE-10)
+            r     = random.randint(35,130)
+            sides = random.choice([3,4,5,6,8])
+            draw.polygon(make_polygon(cx,cy,r,sides,random.uniform(0,math.pi)), fill=random.choice(colors))
 
     elif style == "stars":
-        for _ in range(7):
-            cx, cy  = random.randint(50, 450), random.randint(50, 450)
-            r_out   = random.randint(50, 130)
-            r_in    = r_out // random.randint(2, 3)
-            n_pts   = random.choice([4, 5, 6, 8])
-            rot     = random.uniform(0, math.pi)
-            pts     = make_star(cx, cy, r_out, r_in, n_pts, rot)
-            draw.polygon(pts, fill=random.choice(colors))
+        for _ in range(random.randint(5,9)):
+            cx,cy = random.randint(30,SIZE-30), random.randint(30,SIZE-30)
+            r_o   = random.randint(45,130)
+            r_i   = r_o // random.randint(2,4)
+            n     = random.choice([4,5,6,8])
+            draw.polygon(make_star(cx,cy,r_o,r_i,n,random.uniform(0,math.pi)), fill=random.choice(colors))
 
     elif style == "burst":
-        cx, cy = 250, 250
-        for i in range(24):
-            angle  = 2 * math.pi * i / 24
-            length = random.randint(100, 240)
-            width  = random.randint(4, 22)
-            x2 = cx + length * math.cos(angle)
-            y2 = cy + length * math.sin(angle)
-            draw.line([(cx, cy), (x2, y2)], fill=random.choice(colors), width=width)
-        # Center circle
-        draw.ellipse([170, 170, 330, 330], fill=bg)
+        cx,cy  = SIZE//2, SIZE//2
+        n_rays = random.randint(16,36)
+        for i in range(n_rays):
+            angle  = 2*math.pi*i/n_rays
+            length = random.randint(100,245)
+            w      = random.randint(3,20)
+            draw.line([(cx,cy),(cx+length*math.cos(angle),cy+length*math.sin(angle))],
+                      fill=random.choice(colors), width=w)
 
     elif style == "mosaic":
-        cell = 80
-        for row in range(7):
-            for col in range(7):
-                if random.random() > 0.35:
-                    x = col * cell - 20 + random.randint(-10, 10)
-                    y = row * cell - 20 + random.randint(-10, 10)
-                    shape = random.choice(["rect", "circle"])
-                    c = random.choice(colors)
-                    if shape == "rect":
-                        w = h = random.randint(30, 70)
-                        draw.rectangle([x, y, x+w, y+h], fill=c)
+        cell = random.choice([50,65,80,100])
+        for row in range(SIZE//cell+2):
+            for col in range(SIZE//cell+2):
+                if random.random()>0.3:
+                    x  = col*cell - cell//2
+                    y  = row*cell - cell//2
+                    sz = random.randint(cell//3, cell*2//3)
+                    c  = random.choice(colors)
+                    sh = random.choice(["rect","circle","tri"])
+                    if sh == "rect":
+                        draw.rectangle([x,y,x+sz,y+sz], fill=c)
+                    elif sh == "circle":
+                        draw.ellipse([x,y,x+sz,y+sz], fill=c)
                     else:
-                        r = random.randint(20, 45)
-                        draw.ellipse([x-r, y-r, x+r, y+r], fill=c)
+                        draw.polygon([(x,y+sz),(x+sz//2,y),(x+sz,y+sz)], fill=c)
 
     elif style == "rings":
-        for r in range(220, 0, -40):
-            c = random.choice(colors)
-            draw.ellipse([250-r, 250-r, 250+r, 250+r], outline=c, width=random.randint(8, 25))
+        cx,cy = SIZE//2, SIZE//2
+        step  = random.randint(25,50)
+        for r in range(230,0,-step):
+            draw.ellipse([cx-r,cy-r,cx+r,cy+r],
+                         outline=random.choice(colors), width=random.randint(6,22))
+
+    elif style == "hex_grid":
+        r      = random.randint(28,55)
+        h_dist = r*math.sqrt(3)
+        v_dist = r*1.5
+        row_i  = 0
+        y      = float(-r)
+        while y < SIZE+r:
+            x_off = h_dist/2 if row_i%2 else 0.0
+            x     = -r + x_off
+            while x < SIZE+r:
+                if random.random()>0.2:
+                    draw.polygon(make_polygon(x,y,r-2,6,math.pi/6), fill=random.choice(colors))
+                x += h_dist
+            y     += v_dist
+            row_i += 1
+
+    elif style == "stripes":
+        angle = random.choice([0,45,90,135])
+        width = random.randint(18,60)
+        gap   = random.randint(5,30)
+        step  = width+gap
+        if angle == 0:
+            y = -width
+            while y < SIZE+width:
+                draw.rectangle([0,y,SIZE,y+width], fill=random.choice(colors)); y+=step
+        elif angle == 90:
+            x = -width
+            while x < SIZE+width:
+                draw.rectangle([x,0,x+width,SIZE], fill=random.choice(colors)); x+=step
+        elif angle == 45:
+            for i in range(-SIZE,SIZE*2,step):
+                draw.polygon([(i,0),(i+width,0),(i+width+SIZE,SIZE),(i+SIZE,SIZE)], fill=random.choice(colors))
+        else:
+            for i in range(-SIZE,SIZE*2,step):
+                draw.polygon([(i,SIZE),(i+width,SIZE),(i+width-SIZE,0),(i-SIZE,0)], fill=random.choice(colors))
+
+    elif style == "confetti":
+        for _ in range(random.randint(60,110)):
+            cx = random.randint(0,SIZE)
+            cy = random.randint(0,SIZE)
+            c  = random.choice(colors)
+            sz = random.randint(5,28)
+            sh = random.choice(["circle","rect","line"])
+            if sh == "circle":
+                draw.ellipse([cx,cy,cx+sz,cy+sz], fill=c)
+            elif sh == "rect":
+                draw.polygon(make_polygon(cx,cy,sz,4,random.uniform(0,math.pi)), fill=c)
+            else:
+                a = random.uniform(0,math.pi)
+                l = random.randint(10,38)
+                draw.line([(cx,cy),(cx+l*math.cos(a),cy+l*math.sin(a))], fill=c, width=random.randint(2,6))
+
+    elif style == "waves":
+        for _ in range(random.randint(5,12)):
+            c      = random.choice(colors)
+            y_base = random.randint(40,SIZE-40)
+            amp    = random.randint(12,65)
+            freq   = random.uniform(0.008,0.045)
+            phase  = random.uniform(0,math.pi*2)
+            pts    = [(x,int(y_base+amp*math.sin(freq*x+phase))) for x in range(0,SIZE+1,3)]
+            draw.line(pts, fill=c, width=random.randint(4,20))
+
+    elif style == "lightning":
+        for _ in range(random.randint(3,7)):
+            c   = random.choice(colors)
+            x   = random.randint(60,SIZE-60)
+            y   = 0
+            pts = [(x,y)]
+            while y < SIZE:
+                x = max(10,min(SIZE-10, x+random.randint(-45,45)))
+                y += random.randint(30,85)
+                pts.append((x,y))
+            draw.line(pts, fill=c, width=random.randint(3,12))
+
+    elif style == "triangles":
+        sz = random.randint(55,100)
+        for row in range(SIZE//sz+2):
+            for col in range(SIZE*2//sz+2):
+                x = col*sz//2 - sz//2
+                y = row*sz - sz//2
+                if random.random()>0.3:
+                    c = random.choice(colors)
+                    if (col+row)%2==0:
+                        pts = [(x,y+sz),(x+sz//2,y),(x+sz,y+sz)]
+                    else:
+                        pts = [(x,y),(x+sz,y),(x+sz//2,y+sz)]
+                    draw.polygon(pts, fill=c)
 
     elif style == "mixed":
-        # Campuran semua bentuk
-        for _ in range(5):
-            cx, cy = random.randint(20, 480), random.randint(20, 480)
-            shape = random.choice(["circle", "polygon", "star"])
-            c = random.choice(colors)
-            if shape == "circle":
-                r = random.randint(30, 120)
-                draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill=c)
-            elif shape == "polygon":
-                r = random.randint(40, 110)
-                sides = random.choice([3, 4, 5, 6])
-                pts = make_polygon(cx, cy, r, sides, random.uniform(0, math.pi))
-                draw.polygon(pts, fill=c)
-            elif shape == "star":
-                r_o = random.randint(50, 110)
-                pts = make_star(cx, cy, r_o, r_o//2, random.choice([4,5,6]), random.uniform(0, math.pi))
-                draw.polygon(pts, fill=c)
+        for _ in range(random.randint(8,14)):
+            cx,cy = random.randint(20,SIZE-20), random.randint(20,SIZE-20)
+            c     = random.choice(colors)
+            sh    = random.choice(["circle","polygon","star","line"])
+            if sh == "circle":
+                r = random.randint(20,110)
+                draw.ellipse([cx-r,cy-r,cx+r,cy+r], fill=c)
+            elif sh == "polygon":
+                r = random.randint(30,100)
+                draw.polygon(make_polygon(cx,cy,r,random.choice([3,4,5,6]),random.uniform(0,math.pi)), fill=c)
+            elif sh == "star":
+                r = random.randint(35,100)
+                draw.polygon(make_star(cx,cy,r,r//2,random.choice([4,5,6])), fill=c)
+            else:
+                a = random.uniform(0,math.pi)
+                l = random.randint(50,160)
+                draw.line([(cx,cy),(cx+l*math.cos(a),cy+l*math.sin(a))], fill=c, width=random.randint(5,22))
 
-    # ── Central badge (lingkaran gelap di tengah untuk teks) ──────────────────
-    badge_color = tuple(max(c - 30, 0) for c in bg)
-    # Ring dekoratif
-    ring_color = random.choice(colors)
-    draw.ellipse([85, 85, 415, 415], fill=ring_color)
-    draw.ellipse([100, 100, 400, 400], fill=badge_color)
+    # Badge tengah
+    badge_shape = random.choice(["circle","hexagon","diamond","shield","rounded_rect"])
+    ring_color  = random.choice(colors)
+    badge_r     = 158
+    draw_badge(draw, badge_shape, SIZE//2, SIZE//2, badge_r+14, ring_color)
+    badge_bg = tuple(max(c-15,0) for c in theme["bg1"])
+    draw_badge(draw, badge_shape, SIZE//2, SIZE//2, badge_r, badge_bg)
 
-    # ── Teks symbol & name ────────────────────────────────────────────────────
+    # Teks
+    font_size = 72 if len(symbol)<=4 else 56 if len(symbol)<=6 else 44
     try:
-        f_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 72)
-        f_sm  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 26)
+        f_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+        f_sm  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
     except Exception:
-        f_big = ImageFont.load_default()
-        f_sm  = ImageFont.load_default()
+        f_big = f_sm = ImageFont.load_default()
 
-    text_color = random.choice(colors)
+    text_fill = random.choice(colors)
+    bb  = draw.textbbox((0,0), symbol, font=f_big)
+    tw,th = bb[2]-bb[0], bb[3]-bb[1]
+    draw_outlined_text(draw, ((SIZE-tw)//2,(SIZE-th)//2-22), symbol, f_big, fill=text_fill, outline=badge_bg)
 
-    bb = draw.textbbox((0, 0), symbol, font=f_big)
-    tw, th = bb[2] - bb[0], bb[3] - bb[1]
-    draw.text(((500 - tw) / 2, (500 - th) / 2 - 25), symbol, fill=text_color, font=f_big)
-
-    # Truncate long name
-    display_name = name if len(name) <= 20 else name[:18] + "…"
-    bb2 = draw.textbbox((0, 0), display_name, font=f_sm)
-    tw2 = bb2[2] - bb2[0]
-    draw.text(((500 - tw2) / 2, 305), display_name, fill="white", font=f_sm)
+    display_name = name if len(name)<=22 else name[:20]+"…"
+    bb2 = draw.textbbox((0,0), display_name, font=f_sm)
+    tw2 = bb2[2]-bb2[0]
+    draw.text(((SIZE-tw2)//2, 308), display_name, fill="white", font=f_sm)
 
     buf = BytesIO()
     img.save(buf, format="PNG")
@@ -223,7 +380,7 @@ def generate_token_image(name: str, symbol: str) -> BytesIO:
 
 # ─── ClawPump API ─────────────────────────────────────────────────────────────
 
-def api_upload_image(buf: BytesIO) -> str | None:
+def api_upload_image(buf: BytesIO):
     try:
         r = requests.post(
             f"{CLAWPUMP_BASE}/api/upload",
@@ -247,10 +404,7 @@ def api_launch_token(api_key: str, token: dict, image_url: str) -> dict:
                 "description": token["description"],
                 "imageUrl":    image_url,
             },
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type":  "application/json",
-            },
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             timeout=60,
         )
         d = r.json()
@@ -286,31 +440,27 @@ def api_get_stats() -> dict:
 def is_authorized(context: ContextTypes.DEFAULT_TYPE) -> bool:
     return context.user_data.get("authorized", False)
 
-
 def set_expecting(context: ContextTypes.DEFAULT_TYPE, state):
     context.user_data["expecting"] = state
-
 
 def get_expecting(context: ContextTypes.DEFAULT_TYPE):
     return context.user_data.get("expecting")
 
-
 async def reject_unauthorized(update: Update):
     await update.message.reply_text("🚫 *LU MAU NGAPAIN KESINI? MAKSA AMAT*", parse_mode="Markdown")
-
 
 async def show_menu(update: Update):
     await update.message.reply_text(
         "✅ *Akses diberikan! Selamat datang.*\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📋 *Perintah:*\n"
-        "  /launch   — Launch token (minta API key)\n"
+        "  /launch   — Launch token baru\n"
         "  /earnings — Cek earnings SOL\n"
         "  /stats    — Statistik platform\n"
         "  /help     — Bantuan\n"
         "  /cancel   — Batalkan operasi\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "💡 *Shortcut:* Langsung kirim API key (`cpk_...`) → bot auto launch!",
+        "💡 *Shortcut:* Langsung kirim `cpk_...` → bot auto launch!",
         parse_mode="Markdown",
     )
 
@@ -322,10 +472,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_menu(update)
         return
     set_expecting(context, "access_code")
-    await update.message.reply_text(
-        "🔐 *Masukkan kode akses untuk melanjutkan:*",
-        parse_mode="Markdown",
-    )
+    await update.message.reply_text("🔐 *Masukkan kode akses untuk melanjutkan:*", parse_mode="Markdown")
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -335,9 +482,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(context):
-        await reject_unauthorized(update)
-        return
-    set_expecting(context, "api_key_earnings")  # reset earnings state kalau ada
+        await reject_unauthorized(update); return
     set_expecting(context, None)
     await update.message.reply_text(
         "🔑 *Kirim API key kamu* (format: `cpk_...`)\n\n"
@@ -349,8 +494,7 @@ async def cmd_launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(context):
-        await reject_unauthorized(update)
-        return
+        await reject_unauthorized(update); return
     set_expecting(context, "api_key_earnings")
     await update.message.reply_text(
         "🔑 *Kirim API key kamu* untuk cek earnings:\n\n"
@@ -362,21 +506,19 @@ async def cmd_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(context):
-        await reject_unauthorized(update)
-        return
+        await reject_unauthorized(update); return
     set_expecting(context, None)
     msg    = await update.message.reply_text("⏳ Mengambil statistik...")
     result = await asyncio.get_event_loop().run_in_executor(None, api_get_stats)
     if "error" in result:
-        await msg.edit_text(f"❌ Gagal: `{result['error']}`", parse_mode="Markdown")
-        return
+        await msg.edit_text(f"❌ Gagal: `{result['error']}`", parse_mode="Markdown"); return
     await msg.edit_text(
         f"📊 *ClawPump Platform Stats*\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🪙 Total Tokens:   `{result.get('totalTokens', 0)}`\n"
-        f"🚀 Total Launches: `{result.get('totalLaunches', 0)}`\n"
-        f"💹 Market Cap:     `${result.get('totalMarketCap', 0):,.0f}`\n"
-        f"📈 Volume 24h:     `${result.get('totalVolume24h', 0):,.0f}`\n"
+        f"🪙 Total Tokens:   `{result.get('totalTokens',0)}`\n"
+        f"🚀 Total Launches: `{result.get('totalLaunches',0)}`\n"
+        f"💹 Market Cap:     `${result.get('totalMarketCap',0):,.0f}`\n"
+        f"📈 Volume 24h:     `${result.get('totalVolume24h',0):,.0f}`\n"
         f"━━━━━━━━━━━━━━━━━━━━",
         parse_mode="Markdown",
     )
@@ -384,18 +526,17 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(context):
-        await reject_unauthorized(update)
-        return
+        await reject_unauthorized(update); return
     set_expecting(context, None)
     await update.message.reply_text(
         "🆘 *Panduan ClawPump Bot*\n\n"
-        "🚀 *Cara Launch (2 cara):*\n"
+        "🚀 *Launch (2 cara):*\n"
         "  1. Ketik `/launch` → kirim API key\n"
         "  2. Langsung kirim `cpk_...` → auto launch!\n\n"
         "💰 *Cek Earnings:*\n"
         "  Ketik `/earnings` → kirim API key\n\n"
-        "📊 `/stats` → Statistik platform\n"
-        "❌ `/cancel` → Batalkan operasi\n\n"
+        "📊 `/stats` — Statistik platform\n"
+        "❌ `/cancel` — Batalkan operasi\n\n"
         "💡 API key: [clawpump.tech](https://clawpump.tech) → login Google",
         parse_mode="Markdown",
         disable_web_page_preview=True,
@@ -408,7 +549,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text      = update.message.text.strip()
     expecting = get_expecting(context)
 
-    # ── Belum authorized ─────────────────────────────────────────────────────
+    # Belum authorized
     if not is_authorized(context):
         if expecting == "access_code":
             if text == ACCESS_CODE:
@@ -416,41 +557,36 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 set_expecting(context, None)
                 await show_menu(update)
             else:
-                await update.message.reply_text(
-                    "🚫 *LU MAU NGAPAIN KESINI? MAKSA AMAT*",
-                    parse_mode="Markdown",
-                )
+                await update.message.reply_text("🚫 *LU MAU NGAPAIN KESINI? MAKSA AMAT*", parse_mode="Markdown")
         else:
             await reject_unauthorized(update)
         return
 
-    # ── AUTO LAUNCH: user kirim cpk_ langsung tanpa perintah apapun ──────────
+    # AUTO DETECT cpk_ → launch atau earnings
     if text.startswith("cpk_"):
         api_key = text
-        set_expecting(context, None)
         try:
             await update.message.delete()
         except Exception:
             pass
-        # Cek apakah sedang mode earnings
         if expecting == "api_key_earnings":
+            set_expecting(context, None)
             await do_earnings(update, context, api_key)
         else:
-            # Default: launch
+            set_expecting(context, None)
             await do_launch(update, context, api_key)
         return
 
-    # ── Tidak ada state & bukan cpk_ ─────────────────────────────────────────
+    # Tidak ada state
     if not expecting:
         await update.message.reply_text(
-            "Gunakan perintah atau kirim langsung API key (`cpk_...`) untuk launch.\n"
-            "Ketik /help untuk bantuan.",
+            "Kirim langsung `cpk_...` untuk launch, atau gunakan /help.",
             parse_mode="Markdown",
         )
         return
 
-    # ── Input tidak valid saat menunggu API key ───────────────────────────────
-    if expecting in ("api_key_earnings",):
+    # Input salah format saat menunggu API key
+    if expecting == "api_key_earnings":
         await update.message.reply_text(
             "❌ Format salah. API key harus diawali `cpk_`\nCoba lagi atau /cancel",
             parse_mode="Markdown",
@@ -460,10 +596,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Proses launch ────────────────────────────────────────────────────────────
 
 async def do_launch(update: Update, context: ContextTypes.DEFAULT_TYPE, api_key: str):
-    msg = await update.message.reply_text(
-        "⏳ *Generating token...*",
-        parse_mode="Markdown",
-    )
+    msg = await update.message.reply_text("⏳ *Generating token...*", parse_mode="Markdown")
 
     token     = generate_token_data()
     image_buf = generate_token_image(token["name"], token["symbol"])
@@ -488,10 +621,7 @@ async def do_launch(update: Update, context: ContextTypes.DEFAULT_TYPE, api_key:
     image_url = await asyncio.get_event_loop().run_in_executor(None, api_upload_image, image_buf)
 
     if not image_url:
-        await msg.edit_text(
-            "❌ *Gagal upload gambar!*\nServer ClawPump mungkin down. Coba lagi nanti.",
-            parse_mode="Markdown",
-        )
+        await msg.edit_text("❌ *Gagal upload gambar!*\nServer ClawPump mungkin down. Coba lagi nanti.", parse_mode="Markdown")
         return
 
     await msg.edit_text(
@@ -499,9 +629,7 @@ async def do_launch(update: Update, context: ContextTypes.DEFAULT_TYPE, api_key:
         parse_mode="Markdown",
     )
 
-    result      = await asyncio.get_event_loop().run_in_executor(
-        None, api_launch_token, api_key, token, image_url
-    )
+    result      = await asyncio.get_event_loop().run_in_executor(None, api_launch_token, api_key, token, image_url)
     status_code = result.get("_status_code", 0)
 
     if result.get("success"):
@@ -532,15 +660,13 @@ async def do_launch(update: Update, context: ContextTypes.DEFAULT_TYPE, api_key:
         )
     elif status_code == 401:
         await msg.edit_text(
-            "❌ *API Key tidak valid atau expired!*\n\n"
-            "Pastikan API key benar dari clawpump.tech",
+            "❌ *API Key tidak valid atau expired!*\n\nPastikan API key benar dari clawpump.tech",
             parse_mode="Markdown",
         )
     elif status_code == 503:
-        sol = result.get("suggestions", {}).get("paymentFallback", {}).get("selfFunded", {}).get("amountSol", 0.03)
+        sol = result.get("suggestions",{}).get("paymentFallback",{}).get("selfFunded",{}).get("amountSol",0.03)
         await msg.edit_text(
-            f"⚠️ *Gasless Tidak Tersedia Saat Ini*\n\n"
-            f"Treasury rendah. Coba lagi nanti atau pakai Self-Funded ({sol} SOL).",
+            f"⚠️ *Gasless Tidak Tersedia Saat Ini*\n\nCoba lagi nanti atau pakai Self-Funded ({sol} SOL).",
             parse_mode="Markdown",
         )
     elif status_code == 400:
@@ -563,10 +689,7 @@ async def do_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE, api_ke
 
     if status == 401 or (status != 200 and "error" in result):
         err = result.get("error", "Unauthorized / API key tidak valid")
-        await msg.edit_text(
-            f"❌ *Gagal mengambil earnings!*\n\n`{err}`",
-            parse_mode="Markdown",
-        )
+        await msg.edit_text(f"❌ *Gagal mengambil earnings!*\n\n`{err}`", parse_mode="Markdown")
         return
 
     agent_id      = result.get("agentId", "N/A")
@@ -578,8 +701,8 @@ async def do_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE, api_ke
 
     token_lines = ""
     for t in tokens[:5]:
-        mint        = t.get("mintAddress", "N/A")
-        short_mint  = mint[:8] + "..." + mint[-4:] if len(mint) > 12 else mint
+        mint        = t.get("mintAddress","N/A")
+        short_mint  = mint[:8]+"..."+mint[-4:] if len(mint)>12 else mint
         agent_share = t.get("totalAgentShare", 0)
         token_lines += f"  • `{short_mint}` → {agent_share:.4f} SOL\n"
 
@@ -596,7 +719,6 @@ async def do_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE, api_ke
     if token_lines:
         text += f"\n📊 *Token Breakdown:*\n{token_lines}"
     text += "\n_Fee dikumpulkan tiap jam & otomatis ke wallet kamu._"
-
     await msg.edit_text(text, parse_mode="Markdown")
 
 
