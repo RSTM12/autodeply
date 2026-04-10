@@ -1,5 +1,5 @@
 """
-ClawPump Telegram Bot — dengan kode akses & input API key manual
+ClawPump Telegram Bot — Fixed version
 """
 
 import os
@@ -17,26 +17,24 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    ConversationHandler,
     filters,
 )
 
-# ─── Load environment ─────────────────────────────────────────────────────────
+# ─── Config ───────────────────────────────────────────────────────────────────
 load_dotenv()
-BOT_TOKEN   = os.getenv("BOT_TOKEN")
-ACCESS_CODE = os.getenv("ACCESS_CODE", "CLAWPUMP2024")  # ganti di Railway Variables
+BOT_TOKEN     = os.getenv("BOT_TOKEN")
+ACCESS_CODE   = os.getenv("ACCESS_CODE", "CLAWPUMP2024")
 CLAWPUMP_BASE = "https://clawpump.tech"
 
-# ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── ConversationHandler states ───────────────────────────────────────────────
-(
-    WAITING_ACCESS_CODE,
-    WAITING_API_KEY_LAUNCH,
-    WAITING_API_KEY_EARNINGS,
-) = range(3)
+# ─── Expecting states (disimpan di user_data) ─────────────────────────────────
+# context.user_data["expecting"] bisa berisi:
+#   "access_code"     → user harus input kode akses
+#   "api_key_launch"  → user harus input API key untuk launch
+#   "api_key_earnings"→ user harus input API key untuk earnings
+#   None              → tidak menunggu input apapun
 
 # ─── Token generators ─────────────────────────────────────────────────────────
 ADJECTIVES = [
@@ -75,27 +73,25 @@ def generate_token_data() -> dict:
 
 
 def generate_token_image(name: str, symbol: str) -> BytesIO:
-    bg = (random.randint(20, 80), random.randint(20, 80), random.randint(80, 200))
+    bg   = (random.randint(20, 80), random.randint(20, 80), random.randint(80, 200))
     img  = Image.new("RGB", (500, 500), color=bg)
     draw = ImageDraw.Draw(img)
     for _ in range(8):
         cx, cy = random.randint(50, 450), random.randint(50, 450)
         r = random.randint(30, 120)
-        draw.ellipse(
-            [cx - r, cy - r, cx + r, cy + r],
-            fill=(random.randint(100, 255), random.randint(100, 255), random.randint(100, 255)),
-        )
-    accent = (random.randint(150, 255), random.randint(100, 255), random.randint(0, 150))
+        draw.ellipse([cx-r, cy-r, cx+r, cy+r],
+                     fill=(random.randint(100,255), random.randint(100,255), random.randint(100,255)))
+    accent = (random.randint(150,255), random.randint(100,255), random.randint(0,150))
     draw.ellipse([100, 100, 400, 400], fill=accent)
     try:
         f_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 80)
         f_sm  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
     except Exception:
         f_big = f_sm = ImageFont.load_default()
-    bb = draw.textbbox((0, 0), symbol, font=f_big)
-    draw.text(((500 - (bb[2]-bb[0])) / 2, (500 - (bb[3]-bb[1])) / 2 - 20), symbol, fill="white", font=f_big)
-    bb2 = draw.textbbox((0, 0), name, font=f_sm)
-    draw.text(((500 - (bb2[2]-bb2[0])) / 2, 310), name, fill="white", font=f_sm)
+    bb = draw.textbbox((0,0), symbol, font=f_big)
+    draw.text(((500-(bb[2]-bb[0]))/2, (500-(bb[3]-bb[1]))/2 - 20), symbol, fill="white", font=f_big)
+    bb2 = draw.textbbox((0,0), name, font=f_sm)
+    draw.text(((500-(bb2[2]-bb2[0]))/2, 310), name, fill="white", font=f_sm)
     buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
@@ -112,7 +108,7 @@ def api_upload_image(buf: BytesIO) -> str | None:
             timeout=30,
         )
         d = r.json()
-        return d["imageUrl"] if d.get("success") else None
+        return d.get("imageUrl") if d.get("success") else None
     except Exception as e:
         logger.error("Upload error: %s", e)
         return None
@@ -128,7 +124,10 @@ def api_launch_token(api_key: str, token: dict, image_url: str) -> dict:
                 "description": token["description"],
                 "imageUrl":    image_url,
             },
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type":  "application/json",
+            },
             timeout=60,
         )
         d = r.json()
@@ -139,7 +138,6 @@ def api_launch_token(api_key: str, token: dict, image_url: str) -> dict:
 
 
 def api_check_earnings(api_key: str) -> dict:
-    """Fetch earnings using API key as Bearer auth (no agent ID needed)."""
     try:
         r = requests.get(
             f"{CLAWPUMP_BASE}/api/fees/earnings",
@@ -160,102 +158,204 @@ def api_get_stats() -> dict:
         return {"error": str(e)}
 
 
-# ─── Helper: cek apakah user sudah terautentikasi ────────────────────────────
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def is_authorized(context: ContextTypes.DEFAULT_TYPE) -> bool:
     return context.user_data.get("authorized", False)
 
 
+def set_expecting(context: ContextTypes.DEFAULT_TYPE, state: str | None):
+    context.user_data["expecting"] = state
+
+
+def get_expecting(context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    return context.user_data.get("expecting")
+
+
 async def reject_unauthorized(update: Update):
-    await update.message.reply_text(
-        "🚫 *LU MAU NGAPAIN KESINI? MAKSA AMAT*",
-        parse_mode="Markdown",
-    )
-
-
-# ─── /start — minta kode akses ───────────────────────────────────────────────
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if is_authorized(context):
-        await show_menu(update)
-        return ConversationHandler.END
-
-    await update.message.reply_text(
-        "🔐 *Masukkan kode akses untuk melanjutkan:*",
-        parse_mode="Markdown",
-    )
-    return WAITING_ACCESS_CODE
-
-
-async def receive_access_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = update.message.text.strip()
-
-    if code != ACCESS_CODE:
-        await update.message.reply_text(
-            "🚫 *LU MAU NGAPAIN KESINI? MAKSA AMAT*",
-            parse_mode="Markdown",
-        )
-        return WAITING_ACCESS_CODE  # minta lagi
-
-    context.user_data["authorized"] = True
-    await update.message.reply_text("✅ *Akses diberikan!*", parse_mode="Markdown")
-    await show_menu(update)
-    return ConversationHandler.END
+    await update.message.reply_text("🚫 *LU MAU NGAPAIN KESINI? MAKSA AMAT*", parse_mode="Markdown")
 
 
 async def show_menu(update: Update):
     await update.message.reply_text(
-        "👋 *Selamat datang di ClawPump Bot!*\n\n"
+        "✅ *Akses diberikan! Selamat datang.*\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📋 *Perintah:*\n"
-        "  `/launch`   — Launch token baru\n"
-        "  `/earnings` — Cek earnings SOL\n"
-        "  `/stats`    — Statistik platform\n"
-        "  `/help`     — Bantuan\n"
+        "  /launch   — Launch token baru\n"
+        "  /earnings — Cek earnings SOL\n"
+        "  /stats    — Statistik platform\n"
+        "  /help     — Bantuan\n"
+        "  /cancel   — Batalkan operasi\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Setiap perintah akan meminta API key kamu secara langsung.",
+        "API key diminta langsung tiap perintah & tidak disimpan.",
         parse_mode="Markdown",
     )
 
 
-# ─── /launch ─────────────────────────────────────────────────────────────────
+# ─── Command handlers ─────────────────────────────────────────────────────────
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_authorized(context):
+        await show_menu(update)
+        return
+    set_expecting(context, "access_code")
+    await update.message.reply_text(
+        "🔐 *Masukkan kode akses untuk melanjutkan:*",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    set_expecting(context, None)
+    await update.message.reply_text("❌ Dibatalkan. Ketik /help untuk melihat perintah.")
+
 
 async def cmd_launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(context):
         await reject_unauthorized(update)
-        return ConversationHandler.END
-
+        return
+    set_expecting(context, "api_key_launch")
     await update.message.reply_text(
         "🔑 *Masukkan API key ClawPump kamu:*\n\n"
         "_(Format: `cpk_...` — tidak akan disimpan)_\n\n"
         "Ketik /cancel untuk batal.",
         parse_mode="Markdown",
     )
-    return WAITING_API_KEY_LAUNCH
 
 
-async def receive_api_key_launch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    api_key = update.message.text.strip()
+async def cmd_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(context):
+        await reject_unauthorized(update)
+        return
+    set_expecting(context, "api_key_earnings")
+    await update.message.reply_text(
+        "🔑 *Masukkan API key ClawPump kamu:*\n\n"
+        "_(Earnings ditarik langsung dari API key — tidak disimpan)_\n\n"
+        "Ketik /cancel untuk batal.",
+        parse_mode="Markdown",
+    )
 
-    if not api_key.startswith("cpk_"):
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(context):
+        await reject_unauthorized(update)
+        return
+    set_expecting(context, None)
+    msg    = await update.message.reply_text("⏳ Mengambil statistik platform...")
+    result = await asyncio.get_event_loop().run_in_executor(None, api_get_stats)
+    if "error" in result:
+        await msg.edit_text(f"❌ Gagal: `{result['error']}`", parse_mode="Markdown")
+        return
+    await msg.edit_text(
+        f"📊 *ClawPump Platform Stats*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🪙 Total Tokens:   `{result.get('totalTokens', 0)}`\n"
+        f"🚀 Total Launches: `{result.get('totalLaunches', 0)}`\n"
+        f"💹 Market Cap:     `${result.get('totalMarketCap', 0):,.0f}`\n"
+        f"📈 Volume 24h:     `${result.get('totalVolume24h', 0):,.0f}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(context):
+        await reject_unauthorized(update)
+        return
+    set_expecting(context, None)
+    await update.message.reply_text(
+        "🆘 *Panduan ClawPump Bot*\n\n"
+        "/launch   → Launch token random ke pump.fun\n"
+        "/earnings → Cek earnings SOL via API key\n"
+        "/stats    → Statistik platform ClawPump\n"
+        "/cancel   → Batalkan operasi saat ini\n\n"
+        "💡 API key: [clawpump.tech](https://clawpump.tech) → login Google",
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )
+
+
+# ─── Message handler utama (semua text masuk sini) ───────────────────────────
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text      = update.message.text.strip()
+    expecting = get_expecting(context)
+
+    # ── Belum authorized → cek kode akses ────────────────────────────────────
+    if not is_authorized(context):
+        if expecting == "access_code":
+            if text == ACCESS_CODE:
+                context.user_data["authorized"] = True
+                set_expecting(context, None)
+                await show_menu(update)
+            else:
+                await update.message.reply_text(
+                    "🚫 *LU MAU NGAPAIN KESINI? MAKSA AMAT*",
+                    parse_mode="Markdown",
+                )
+        else:
+            await reject_unauthorized(update)
+        return
+
+    # ── Sudah authorized ──────────────────────────────────────────────────────
+
+    # Tidak sedang menunggu input apapun
+    if not expecting:
         await update.message.reply_text(
-            "❌ Format salah. Harus diawali `cpk_`\nCoba lagi atau /cancel",
-            parse_mode="Markdown",
+            "Gunakan perintah:\n/launch /earnings /stats /help"
         )
-        return WAITING_API_KEY_LAUNCH
+        return
 
-    # Hapus pesan API key user (keamanan)
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
+    # ── Terima API key untuk LAUNCH ───────────────────────────────────────────
+    if expecting == "api_key_launch":
+        if not text.startswith("cpk_"):
+            await update.message.reply_text(
+                "❌ Format salah. API key harus diawali `cpk_`\nCoba lagi atau /cancel",
+                parse_mode="Markdown",
+            )
+            return
 
+        api_key = text
+        set_expecting(context, None)
+
+        # Hapus pesan user yang berisi API key (keamanan)
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        await do_launch(update, context, api_key)
+        return
+
+    # ── Terima API key untuk EARNINGS ─────────────────────────────────────────
+    if expecting == "api_key_earnings":
+        if not text.startswith("cpk_"):
+            await update.message.reply_text(
+                "❌ Format salah. API key harus diawali `cpk_`\nCoba lagi atau /cancel",
+                parse_mode="Markdown",
+            )
+            return
+
+        api_key = text
+        set_expecting(context, None)
+
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        await do_earnings(update, context, api_key)
+        return
+
+
+# ─── Proses launch ────────────────────────────────────────────────────────────
+
+async def do_launch(update: Update, context: ContextTypes.DEFAULT_TYPE, api_key: str):
     msg = await update.message.reply_text(
         "⏳ *Generating token data & gambar...*",
         parse_mode="Markdown",
     )
 
-    # Generate data & gambar
     token     = generate_token_data()
     image_buf = generate_token_image(token["name"], token["symbol"])
 
@@ -268,7 +368,7 @@ async def receive_api_key_launch(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown",
     )
 
-    # Kirim preview gambar
+    # Preview gambar
     image_buf.seek(0)
     await update.message.reply_photo(
         photo=image_buf,
@@ -276,26 +376,27 @@ async def receive_api_key_launch(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown",
     )
 
-    # Upload gambar
+    # Upload
     image_buf.seek(0)
     image_url = await asyncio.get_event_loop().run_in_executor(None, api_upload_image, image_buf)
 
     if not image_url:
         await msg.edit_text(
-            "❌ *Gagal upload gambar!*\nServer ClawPump mungkin sedang down. Coba lagi nanti.",
+            "❌ *Gagal upload gambar!*\nServer ClawPump mungkin down. Coba lagi nanti.",
             parse_mode="Markdown",
         )
-        return ConversationHandler.END
+        return
 
     await msg.edit_text(
         f"✅ Gambar uploaded!\n\n"
-        f"⏳ Launching *{token['name']}* ke pump.fun...\n"
-        f"_(10–30 detik)_",
+        f"⏳ Launching *{token['name']}* ke pump.fun...\n_(10–30 detik)_",
         parse_mode="Markdown",
     )
 
-    # Launch token
-    result      = await asyncio.get_event_loop().run_in_executor(None, api_launch_token, api_key, token, image_url)
+    # Launch
+    result      = await asyncio.get_event_loop().run_in_executor(
+        None, api_launch_token, api_key, token, image_url
+    )
     status_code = result.get("_status_code", 0)
 
     if result.get("success"):
@@ -303,10 +404,9 @@ async def receive_api_key_launch(update: Update, context: ContextTypes.DEFAULT_T
         tx           = result.get("txHash", "N/A")
         pump_url     = result.get("pumpUrl", "#")
         explorer_url = result.get("explorerUrl", "#")
-
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🟢 Lihat di Pump.fun", url=pump_url)],
-            [InlineKeyboardButton("🔍 Solscan Explorer", url=explorer_url)],
+            [InlineKeyboardButton("🔍 Solscan Explorer",  url=explorer_url)],
         ])
         await msg.edit_text(
             f"🎉 *Token Berhasil Launch!*\n\n"
@@ -319,25 +419,21 @@ async def receive_api_key_launch(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode="Markdown",
             reply_markup=keyboard,
         )
-
     elif status_code == 429:
         retry = result.get("retryAfterHours", "?")
         await msg.edit_text(
-            f"⏳ *Rate Limit!*\n\nCoba lagi dalam *{retry} jam*.\n"
-            f"_(Gasless launch max 1x per 24 jam)_",
+            f"⏳ *Rate Limit!*\n\nCoba lagi dalam *{retry} jam*.\n_(Max 1 launch per 24 jam)_",
             parse_mode="Markdown",
         )
     elif status_code == 401:
         await msg.edit_text(
-            "❌ *API Key tidak valid atau expired!*\n\n"
-            "Pastikan kamu copy API key yang benar dari clawpump.tech",
+            "❌ *API Key tidak valid atau expired!*\n\nPastikan API key benar dari clawpump.tech",
             parse_mode="Markdown",
         )
     elif status_code == 503:
         sol = result.get("suggestions", {}).get("paymentFallback", {}).get("selfFunded", {}).get("amountSol", 0.03)
         await msg.edit_text(
-            f"⚠️ *Gasless Tidak Tersedia Saat Ini*\n\n"
-            f"Treasury rendah. Coba lagi nanti atau pakai Self-Funded ({sol} SOL).",
+            f"⚠️ *Gasless Tidak Tersedia Saat Ini*\n\nCoba lagi nanti atau pakai Self-Funded ({sol} SOL).",
             parse_mode="Markdown",
         )
     elif status_code == 400:
@@ -350,53 +446,21 @@ async def receive_api_key_launch(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode="Markdown",
         )
 
-    return ConversationHandler.END
 
+# ─── Proses earnings ──────────────────────────────────────────────────────────
 
-# ─── /earnings ────────────────────────────────────────────────────────────────
+async def do_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE, api_key: str):
+    msg    = await update.message.reply_text("⏳ Mengambil data earnings...")
+    result = await asyncio.get_event_loop().run_in_executor(None, api_check_earnings, api_key)
+    status = result.get("_status_code", 0)
 
-async def cmd_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(context):
-        await reject_unauthorized(update)
-        return ConversationHandler.END
-
-    await update.message.reply_text(
-        "🔑 *Masukkan API key ClawPump kamu:*\n\n"
-        "_(Earnings akan ditarik berdasarkan API key — tidak disimpan)_\n\n"
-        "Ketik /cancel untuk batal.",
-        parse_mode="Markdown",
-    )
-    return WAITING_API_KEY_EARNINGS
-
-
-async def receive_api_key_earnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    api_key = update.message.text.strip()
-
-    if not api_key.startswith("cpk_"):
-        await update.message.reply_text(
-            "❌ Format salah. Harus diawali `cpk_`\nCoba lagi atau /cancel",
-            parse_mode="Markdown",
-        )
-        return WAITING_API_KEY_EARNINGS
-
-    # Hapus pesan API key user (keamanan)
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
-
-    msg = await update.message.reply_text("⏳ Mengambil data earnings...")
-
-    result      = await asyncio.get_event_loop().run_in_executor(None, api_check_earnings, api_key)
-    status_code = result.get("_status_code", 0)
-
-    if status_code == 401 or "error" in result:
-        err = result.get("error", "Unauthorized")
+    if status == 401 or (status != 200 and "error" in result):
+        err = result.get("error", "Unauthorized / API key tidak valid")
         await msg.edit_text(
-            f"❌ *Gagal mengambil earnings!*\n\n`{err}`\n\nPastikan API key kamu valid.",
+            f"❌ *Gagal mengambil earnings!*\n\n`{err}`",
             parse_mode="Markdown",
         )
-        return ConversationHandler.END
+        return
 
     agent_id      = result.get("agentId", "N/A")
     total_earned  = result.get("totalEarned", 0)
@@ -424,72 +488,9 @@ async def receive_api_key_earnings(update: Update, context: ContextTypes.DEFAULT
     )
     if token_lines:
         text += f"\n📊 *Token Breakdown:*\n{token_lines}"
-    text += "\n_Fee dikumpulkan tiap jam & dikirim otomatis ke wallet kamu._"
+    text += "\n_Fee dikumpulkan tiap jam & otomatis ke wallet kamu._"
 
     await msg.edit_text(text, parse_mode="Markdown")
-    return ConversationHandler.END
-
-
-# ─── /stats ───────────────────────────────────────────────────────────────────
-
-async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(context):
-        await reject_unauthorized(update)
-        return
-
-    msg    = await update.message.reply_text("⏳ Mengambil statistik platform...")
-    result = await asyncio.get_event_loop().run_in_executor(None, api_get_stats)
-
-    if "error" in result:
-        await msg.edit_text(f"❌ Gagal: `{result['error']}`", parse_mode="Markdown")
-        return
-
-    await msg.edit_text(
-        f"📊 *ClawPump Platform Stats*\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🪙 Total Tokens:   `{result.get('totalTokens', 0)}`\n"
-        f"🚀 Total Launches: `{result.get('totalLaunches', 0)}`\n"
-        f"💹 Market Cap:     `${result.get('totalMarketCap', 0):,.0f}`\n"
-        f"📈 Volume 24h:     `${result.get('totalVolume24h', 0):,.0f}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━",
-        parse_mode="Markdown",
-    )
-
-
-# ─── /help ────────────────────────────────────────────────────────────────────
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(context):
-        await reject_unauthorized(update)
-        return
-
-    await update.message.reply_text(
-        "🆘 *Panduan ClawPump Bot*\n\n"
-        "*Semua perintah minta API key secara manual — tidak disimpan.*\n\n"
-        "`/launch`   → Generate token random & launch ke pump.fun\n"
-        "`/earnings` → Cek earnings SOL via API key\n"
-        "`/stats`    → Statistik platform ClawPump\n"
-        "`/cancel`   → Batalkan operasi saat ini\n\n"
-        "💡 API key bisa didapat di [clawpump.tech](https://clawpump.tech) → login Google",
-        parse_mode="Markdown",
-        disable_web_page_preview=True,
-    )
-
-
-# ─── /cancel ─────────────────────────────────────────────────────────────────
-
-async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Dibatalkan.")
-    return ConversationHandler.END
-
-
-# ─── Unknown ──────────────────────────────────────────────────────────────────
-
-async def cmd_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(context):
-        await reject_unauthorized(update)
-        return
-    await update.message.reply_text("❓ Perintah tidak dikenal. Ketik /help untuk bantuan.")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -500,46 +501,14 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # ConversationHandler: /start → kode akses
-    start_conv = ConversationHandler(
-        entry_points=[CommandHandler("start", cmd_start)],
-        states={
-            WAITING_ACCESS_CODE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_access_code)
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
-    )
-
-    # ConversationHandler: /launch → API key
-    launch_conv = ConversationHandler(
-        entry_points=[CommandHandler("launch", cmd_launch)],
-        states={
-            WAITING_API_KEY_LAUNCH: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_api_key_launch)
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
-    )
-
-    # ConversationHandler: /earnings → API key
-    earnings_conv = ConversationHandler(
-        entry_points=[CommandHandler("earnings", cmd_earnings)],
-        states={
-            WAITING_API_KEY_EARNINGS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_api_key_earnings)
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
-    )
-
-    app.add_handler(start_conv)
-    app.add_handler(launch_conv)
-    app.add_handler(earnings_conv)
-    app.add_handler(CommandHandler("stats",   cmd_stats))
-    app.add_handler(CommandHandler("help",    cmd_help))
-    app.add_handler(CommandHandler("cancel",  cmd_cancel))
-    app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
+    app.add_handler(CommandHandler("start",    cmd_start))
+    app.add_handler(CommandHandler("launch",   cmd_launch))
+    app.add_handler(CommandHandler("earnings", cmd_earnings))
+    app.add_handler(CommandHandler("stats",    cmd_stats))
+    app.add_handler(CommandHandler("help",     cmd_help))
+    app.add_handler(CommandHandler("cancel",   cmd_cancel))
+    # Semua text non-command masuk satu handler
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logger.info("🤖 Bot started! Polling...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
