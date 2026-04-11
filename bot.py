@@ -267,45 +267,57 @@ def api_upload_image(buf):
 
 # ─── HANYA FUNGSI INI YANG DIUBAH ─────────────────────────────────────────────
 
-def _rotate_tor_ip():
-    try:
-        with stem.control.Controller.from_port(port=9051) as ctrl:
-            ctrl.authenticate()
-            ctrl.signal(stem.Signal.NEWNYM)
-            time.sleep(5)
-        logger.info("TOR: circuit rotated")
-        return True
-    except Exception as e:
-        logger.warning("TOR rotate gagal: %s", e)
-        return False
-
-def _tor_ready():
-    """Cek apakah TOR SOCKS proxy bisa dipakai"""
+def _get_tor_ip():
+    """Ambil IP saat ini via TOR"""
     try:
         r = requests.get(
-            "https://check.torproject.org/api/ip",
+            "https://api.ipify.org?format=json",
             proxies={"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"},
             timeout=10,
         )
-        return r.status_code == 200
+        return r.json().get("ip", "")
     except Exception:
+        return ""
+
+def _rotate_tor_ip():
+    """Rotate TOR dan tunggu sampai IP benar-benar berubah"""
+    try:
+        old_ip = _get_tor_ip()
+        logger.info("TOR IP sekarang: %s", old_ip)
+
+        with stem.control.Controller.from_port(port=9051) as ctrl:
+            ctrl.authenticate()
+            ctrl.signal(stem.Signal.NEWNYM)
+
+        # Tunggu sampai IP berubah, max 60 detik
+        for i in range(20):
+            time.sleep(3)
+            new_ip = _get_tor_ip()
+            if new_ip and new_ip != old_ip:
+                logger.info("TOR IP berhasil rotate: %s → %s", old_ip, new_ip)
+                return True
+            logger.info("TOR belum ganti IP (%d/20), masih: %s", i + 1, new_ip)
+
+        logger.warning("TOR gagal ganti IP setelah 60 detik")
+        return False
+
+    except Exception as e:
+        logger.warning("TOR rotate error: %s", e)
         return False
 
 def api_launch_token(api_key, token, image_url):
     try:
-        # Coba pakai TOR dulu
         tor_ok = _rotate_tor_ip()
 
-        if tor_ok and _tor_ready():
-            logger.info("Launch via TOR")
-            proxy = {
-                "http":  "socks5h://127.0.0.1:9050",
-                "https": "socks5h://127.0.0.1:9050",
-            }
+        proxy = (
+            {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+            if tor_ok else None
+        )
+
+        if tor_ok:
+            logger.info("Launch via TOR (IP sudah rotate)")
         else:
-            # Fallback: langsung tanpa proxy
-            logger.warning("TOR tidak ready, fallback ke direct connection")
-            proxy = None
+            logger.warning("TOR gagal rotate, fallback direct")
 
         r = requests.post(
             f"{CLAWPUMP_BASE}/api/launch",
