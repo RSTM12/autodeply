@@ -11,10 +11,13 @@ import random
 import asyncio
 import requests
 import logging
+import time
 import numpy as np
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
+import stem
+import stem.control
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -25,7 +28,7 @@ from telegram.ext import (
     filters,
 )
 
-# ─── Config ───────────────────────────────────────────────────────────────────
+# ─── Config ────────────────────────────────────────────────────────────────────
 load_dotenv()
 BOT_TOKEN     = os.getenv("BOT_TOKEN")
 ACCESS_CODE   = os.getenv("ACCESS_CODE", "CLAWPUMP2024")
@@ -34,7 +37,7 @@ CLAWPUMP_BASE = "https://clawpump.tech"
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Token data ───────────────────────────────────────────────────────────────
+# ─── Token data ────────────────────────────────────────────────────────────────
 ADJECTIVES = [
     "Cosmic","Lunar","Solar","Quantum","Cyber","Digital","Neon","Turbo",
     "Ultra","Mega","Alpha","Nova","Stellar","Atomic","Hyper","Super",
@@ -84,7 +87,7 @@ THEMES = [
     {"name":"electric", "bg1":(0,5,20),   "bg2":(5,10,40),  "colors":[(0,200,255),(100,220,255),(0,150,255),(50,255,200),(0,180,200)]},
 ]
 
-# ─── Image helpers ────────────────────────────────────────────────────────────
+# ─── Image helpers ─────────────────────────────────────────────────────────────
 
 def make_gradient(w,h,c1,c2,direction="vertical"):
     c1=np.array(c1,dtype=np.float32); c2=np.array(c2,dtype=np.float32)
@@ -253,7 +256,7 @@ def generate_token_image(name,symbol):
     return buf
 
 
-# ─── ClawPump API ─────────────────────────────────────────────────────────────
+# ─── ClawPump API ──────────────────────────────────────────────────────────────
 
 def api_upload_image(buf):
     try:
@@ -262,23 +265,53 @@ def api_upload_image(buf):
     except Exception as e:
         logger.error("Upload: %s",e);return None
 
-def api_launch_token(api_key,token,image_url):
+# ─── HANYA FUNGSI INI YANG DIUBAH ─────────────────────────────────────────────
+
+def _rotate_tor_ip():
+    """Minta TOR circuit baru = IP baru tiap launch"""
     try:
-        r=requests.post(
+        with stem.control.Controller.from_port(port=9051) as ctrl:
+            ctrl.authenticate()
+            ctrl.signal(stem.Signal.NEWNYM)
+            time.sleep(5)
+        logger.info("TOR: circuit rotated, IP baru siap")
+    except Exception as e:
+        logger.warning("TOR rotate gagal (mungkin TOR belum ready): %s", e)
+
+def api_launch_token(api_key, token, image_url):
+    try:
+        # Rotate IP dulu sebelum launch
+        _rotate_tor_ip()
+
+        proxy = {
+            "http":  "socks5h://127.0.0.1:9050",
+            "https": "socks5h://127.0.0.1:9050",
+        }
+
+        r = requests.post(
             f"{CLAWPUMP_BASE}/api/launch",
-            json={"name":token["name"],"symbol":token["symbol"],"description":token["description"],"imageUrl":image_url},
-            headers={"Authorization":f"Bearer {api_key}","Content-Type":"application/json"},
+            json={
+                "name":        token["name"],
+                "symbol":      token["symbol"],
+                "description": token["description"],
+                "imageUrl":    image_url,
+            },
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type":  "application/json",
+            },
+            proxies=proxy,
             timeout=60,
         )
-        d=r.json();d["_sc"]=r.status_code;return d
+        d = r.json(); d["_sc"] = r.status_code; return d
+
     except Exception as e:
-        return {"success":False,"error":str(e),"_sc":0}
+        logger.error("api_launch_token TOR: %s", e)
+        return {"success": False, "error": str(e), "_sc": 0}
+
+# ─── END FUNGSI YANG DIUBAH ────────────────────────────────────────────────────
 
 def api_get_portfolio(api_key):
-    """
-    GET /api/agent/portfolio — return agentId, username, wallet links.
-    Return 401 jika API key invalid.
-    """
     try:
         r=requests.get(
             f"{CLAWPUMP_BASE}/api/agent/portfolio",
@@ -308,7 +341,7 @@ def api_get_stats():
         return {"error":str(e)}
 
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# ─── Helpers ───────────────────────────────────────────────────────────────────
 
 def is_authorized(ctx): return ctx.user_data.get("authorized",False)
 def set_expecting(ctx,state): ctx.user_data["expecting"]=state
@@ -334,7 +367,7 @@ async def show_menu(update):
     )
 
 
-# ─── Commands ─────────────────────────────────────────────────────────────────
+# ─── Commands ──────────────────────────────────────────────────────────────────
 
 async def cmd_start(update,ctx):
     if is_authorized(ctx): await show_menu(update); return
@@ -392,7 +425,7 @@ async def cmd_help(update,ctx):
         parse_mode="Markdown",disable_web_page_preview=True)
 
 
-# ─── Message handler ──────────────────────────────────────────────────────────
+# ─── Message handler ───────────────────────────────────────────────────────────
 
 async def handle_text(update,ctx):
     text=update.message.text.strip()
@@ -410,7 +443,6 @@ async def handle_text(update,ctx):
             await reject_unauthorized(update)
         return
 
-    # Auto detect cpk_
     if text.startswith("cpk_"):
         try: await update.message.delete()
         except Exception: pass
@@ -430,7 +462,7 @@ async def handle_text(update,ctx):
         await update.message.reply_text("❌ Format salah. Harus diawali `cpk_`\nCoba lagi atau /cancel",parse_mode="Markdown")
 
 
-# ─── Launch ───────────────────────────────────────────────────────────────────
+# ─── Launch ────────────────────────────────────────────────────────────────────
 
 async def do_launch(update,ctx,api_key):
     msg=await update.message.reply_text("⏳ *Generating token...*",parse_mode="Markdown")
@@ -439,7 +471,7 @@ async def do_launch(update,ctx,api_key):
 
     await msg.edit_text(
         f"🎲 *Token Generated!*\n\n"
-        f"📛 Name:   `{token['name']}`\n"
+        f"📋 Name:   `{token['name']}`\n"
         f"🔤 Symbol: `{token['symbol']}`\n"
         f"📝 Desc:   _{token['description']}_\n\n"
         f"⏳ Uploading gambar...",parse_mode="Markdown")
@@ -452,7 +484,10 @@ async def do_launch(update,ctx,api_key):
     if not image_url:
         await msg.edit_text("❌ *Gagal upload gambar!*\nCoba lagi nanti.",parse_mode="Markdown");return
 
-    await msg.edit_text(f"✅ Gambar uploaded!\n\n⏳ Launching *{token['name']}* ke pump.fun...\n_(10–30 detik)_",parse_mode="Markdown")
+    await msg.edit_text(
+        f"✅ Gambar uploaded!\n\n"
+        f"⏳ Launching *{token['name']}* ke pump.fun via TOR...\n"
+        f"_(10–30 detik)_",parse_mode="Markdown")
 
     result=await asyncio.get_event_loop().run_in_executor(None,api_launch_token,api_key,token,image_url)
     sc=result.get("_sc",0)
@@ -466,7 +501,7 @@ async def do_launch(update,ctx,api_key):
         ])
         await msg.edit_text(
             f"🎉 *Token Berhasil Launch!*\n\n"
-            f"📛 Name:   `{token['name']}`\n"
+            f"📋 Name:   `{token['name']}`\n"
             f"🔤 Symbol: `${token['symbol']}`\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 Mint Address:\n`{mint}`\n\n"
@@ -488,12 +523,11 @@ async def do_launch(update,ctx,api_key):
         await msg.edit_text(f"❌ *Launch Gagal!*\n\nStatus: `{sc}`\nError: `{err}`",parse_mode="Markdown")
 
 
-# ─── Earnings (fully auto via /api/agent/portfolio) ───────────────────────────
+# ─── Earnings ──────────────────────────────────────────────────────────────────
 
 async def do_earnings(update,ctx,api_key):
     msg=await update.message.reply_text("🔍 *Auto-detecting agent dari API key...*",parse_mode="Markdown")
 
-    # Step 1: GET /api/agent/portfolio → return agentId, username, dll
     portfolio=await asyncio.get_event_loop().run_in_executor(None,api_get_portfolio,api_key)
     sc=portfolio.get("_sc",0)
 
@@ -502,9 +536,9 @@ async def do_earnings(update,ctx,api_key):
     if sc==0 or "error" in portfolio:
         await msg.edit_text(f"❌ *Gagal connect ke ClawPump!*\n\n`{portfolio.get('error','Connection error')}`",parse_mode="Markdown");return
 
-    agent_id  = portfolio.get("agentId") or portfolio.get("agent_id")
-    username  = portfolio.get("username") or portfolio.get("name") or agent_id
-    wallet    = portfolio.get("walletAddress") or portfolio.get("wallet") or "N/A"
+    agent_id = portfolio.get("agentId") or portfolio.get("agent_id")
+    username = portfolio.get("username") or portfolio.get("name") or agent_id
+    wallet   = portfolio.get("walletAddress") or portfolio.get("wallet") or "N/A"
 
     if not agent_id:
         await msg.edit_text(
@@ -515,7 +549,6 @@ async def do_earnings(update,ctx,api_key):
 
     await msg.edit_text(f"✅ Agent: `{agent_id}`\n\n⏳ Mengambil earnings...",parse_mode="Markdown")
 
-    # Step 2: GET /api/fees/earnings
     earnings=await asyncio.get_event_loop().run_in_executor(None,api_get_earnings,api_key,agent_id)
     esc=earnings.get("_sc",0)
 
@@ -536,13 +569,12 @@ async def do_earnings(update,ctx,api_key):
         collected=t.get("totalCollected",0)
         token_lines+=f"  • `{short}`\n    Collected: `{collected:.4f}` | Kamu: `{share:.4f}` SOL\n"
 
-    # Format wallet
     wallet_display=f"`{wallet[:16]}...{wallet[-6:]}`" if len(wallet)>22 else f"`{wallet}`"
 
     text=(
         f"👤 *Detail Agent*\n\n"
         f"🆔 Agent ID: `{agent_id}`\n"
-        f"📛 Username: `{username}`\n"
+        f"📋 Username: `{username}`\n"
         f"💳 Wallet:   {wallet_display}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 *Earnings*\n\n"
@@ -562,7 +594,7 @@ async def do_earnings(update,ctx,api_key):
     await msg.edit_text(text,parse_mode="Markdown",reply_markup=keyboard)
 
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     if not BOT_TOKEN: raise ValueError("BOT_TOKEN tidak ditemukan!")
