@@ -268,25 +268,44 @@ def api_upload_image(buf):
 # ─── HANYA FUNGSI INI YANG DIUBAH ─────────────────────────────────────────────
 
 def _rotate_tor_ip():
-    """Minta TOR circuit baru = IP baru tiap launch"""
     try:
         with stem.control.Controller.from_port(port=9051) as ctrl:
             ctrl.authenticate()
             ctrl.signal(stem.Signal.NEWNYM)
             time.sleep(5)
-        logger.info("TOR: circuit rotated, IP baru siap")
+        logger.info("TOR: circuit rotated")
+        return True
     except Exception as e:
-        logger.warning("TOR rotate gagal (mungkin TOR belum ready): %s", e)
+        logger.warning("TOR rotate gagal: %s", e)
+        return False
+
+def _tor_ready():
+    """Cek apakah TOR SOCKS proxy bisa dipakai"""
+    try:
+        r = requests.get(
+            "https://check.torproject.org/api/ip",
+            proxies={"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"},
+            timeout=10,
+        )
+        return r.status_code == 200
+    except Exception:
+        return False
 
 def api_launch_token(api_key, token, image_url):
     try:
-        # Rotate IP dulu sebelum launch
-        _rotate_tor_ip()
+        # Coba pakai TOR dulu
+        tor_ok = _rotate_tor_ip()
 
-        proxy = {
-            "http":  "socks5h://127.0.0.1:9050",
-            "https": "socks5h://127.0.0.1:9050",
-        }
+        if tor_ok and _tor_ready():
+            logger.info("Launch via TOR")
+            proxy = {
+                "http":  "socks5h://127.0.0.1:9050",
+                "https": "socks5h://127.0.0.1:9050",
+            }
+        else:
+            # Fallback: langsung tanpa proxy
+            logger.warning("TOR tidak ready, fallback ke direct connection")
+            proxy = None
 
         r = requests.post(
             f"{CLAWPUMP_BASE}/api/launch",
@@ -306,7 +325,7 @@ def api_launch_token(api_key, token, image_url):
         d = r.json(); d["_sc"] = r.status_code; return d
 
     except Exception as e:
-        logger.error("api_launch_token TOR: %s", e)
+        logger.error("api_launch_token: %s", e)
         return {"success": False, "error": str(e), "_sc": 0}
 
 # ─── END FUNGSI YANG DIUBAH ────────────────────────────────────────────────────
