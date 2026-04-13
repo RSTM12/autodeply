@@ -12,6 +12,7 @@ import asyncio
 import requests
 import logging
 import time
+import socket
 import numpy as np
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
@@ -265,59 +266,64 @@ def api_upload_image(buf):
     except Exception as e:
         logger.error("Upload: %s",e);return None
 
-# ─── HANYA FUNGSI INI YANG DIUBAH ─────────────────────────────────────────────
+# ─── TOR helpers ───────────────────────────────────────────────────────────────
+
+def _tor_available():
+    """Cek cepat apakah TOR SOCKS port bisa dipakai"""
+    try:
+        s = socket.create_connection(("127.0.0.1", 9050), timeout=2)
+        s.close()
+        return True
+    except Exception:
+        return False
 
 def _get_tor_ip():
-    """Ambil IP saat ini via TOR"""
     try:
         r = requests.get(
             "https://api.ipify.org?format=json",
-            proxies={"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"},
+            proxies={"http":"socks5h://127.0.0.1:9050","https":"socks5h://127.0.0.1:9050"},
             timeout=10,
         )
-        return r.json().get("ip", "")
+        return r.json().get("ip","")
     except Exception:
         return ""
 
 def _rotate_tor_ip():
-    """Rotate TOR dan tunggu sampai IP benar-benar berubah"""
+    if not _tor_available():
+        logger.warning("TOR tidak aktif (port 9050 tertutup)")
+        return False
     try:
         old_ip = _get_tor_ip()
         logger.info("TOR IP sekarang: %s", old_ip)
-
         with stem.control.Controller.from_port(port=9051) as ctrl:
             ctrl.authenticate()
             ctrl.signal(stem.Signal.NEWNYM)
-
-        # Tunggu sampai IP berubah, max 60 detik
         for i in range(20):
             time.sleep(3)
             new_ip = _get_tor_ip()
             if new_ip and new_ip != old_ip:
-                logger.info("TOR IP berhasil rotate: %s → %s", old_ip, new_ip)
+                logger.info("TOR IP rotate: %s → %s", old_ip, new_ip)
                 return True
-            logger.info("TOR belum ganti IP (%d/20), masih: %s", i + 1, new_ip)
-
-        logger.warning("TOR gagal ganti IP setelah 60 detik")
+            logger.info("TOR nunggu IP baru (%d/20): %s", i+1, new_ip)
+        logger.warning("TOR IP tidak berubah setelah 60 detik")
         return False
-
     except Exception as e:
         logger.warning("TOR rotate error: %s", e)
         return False
 
+# ─── Launch via TOR ────────────────────────────────────────────────────────────
+
 def api_launch_token(api_key, token, image_url):
     try:
         tor_ok = _rotate_tor_ip()
-
         proxy = (
-            {"http": "socks5h://127.0.0.1:9050", "https": "socks5h://127.0.0.1:9050"}
+            {"http":"socks5h://127.0.0.1:9050","https":"socks5h://127.0.0.1:9050"}
             if tor_ok else None
         )
-
         if tor_ok:
-            logger.info("Launch via TOR (IP sudah rotate)")
+            logger.info("Launch via TOR")
         else:
-            logger.warning("TOR gagal rotate, fallback direct")
+            logger.warning("Launch via direct (TOR tidak aktif)")
 
         r = requests.post(
             f"{CLAWPUMP_BASE}/api/launch",
@@ -334,33 +340,28 @@ def api_launch_token(api_key, token, image_url):
             proxies=proxy,
             timeout=60,
         )
-        d = r.json(); d["_sc"] = r.status_code; return d
+        d = r.json()
+        d["_sc"] = r.status_code
+        if r.status_code == 429 and not tor_ok:
+            d["_tor_inactive"] = True
+        return d
 
     except Exception as e:
         logger.error("api_launch_token: %s", e)
         return {"success": False, "error": str(e), "_sc": 0}
 
-# ─── END FUNGSI YANG DIUBAH ────────────────────────────────────────────────────
+# ─── Other API ─────────────────────────────────────────────────────────────────
 
 def api_get_portfolio(api_key):
     try:
-        r=requests.get(
-            f"{CLAWPUMP_BASE}/api/agent/portfolio",
-            headers={"Authorization":f"Bearer {api_key}"},
-            timeout=15,
-        )
+        r=requests.get(f"{CLAWPUMP_BASE}/api/agent/portfolio",headers={"Authorization":f"Bearer {api_key}"},timeout=15)
         d=r.json();d["_sc"]=r.status_code;return d
     except Exception as e:
         return {"error":str(e),"_sc":0}
 
 def api_get_earnings(api_key,agent_id):
     try:
-        r=requests.get(
-            f"{CLAWPUMP_BASE}/api/fees/earnings",
-            params={"agentId":agent_id},
-            headers={"Authorization":f"Bearer {api_key}"},
-            timeout=20,
-        )
+        r=requests.get(f"{CLAWPUMP_BASE}/api/fees/earnings",params={"agentId":agent_id},headers={"Authorization":f"Bearer {api_key}"},timeout=20)
         d=r.json();d["_sc"]=r.status_code;return d
     except Exception as e:
         return {"error":str(e),"_sc":0}
@@ -412,16 +413,12 @@ async def cmd_cancel(update,ctx):
 async def cmd_launch(update,ctx):
     if not is_authorized(ctx): await reject_unauthorized(update); return
     set_expecting(ctx,None)
-    await update.message.reply_text(
-        "🔑 *Kirim API key kamu* (`cpk_...`)\n\nBot langsung launch. /cancel untuk batal.",
-        parse_mode="Markdown")
+    await update.message.reply_text("🔑 *Kirim API key kamu* (`cpk_...`)\n\nBot langsung launch. /cancel untuk batal.",parse_mode="Markdown")
 
 async def cmd_earnings(update,ctx):
     if not is_authorized(ctx): await reject_unauthorized(update); return
     set_expecting(ctx,"api_key_earnings")
-    await update.message.reply_text(
-        "🔑 *Kirim API key kamu* (`cpk_...`)\n\nBot auto-detect agent & tampilkan semua info. /cancel untuk batal.",
-        parse_mode="Markdown")
+    await update.message.reply_text("🔑 *Kirim API key kamu* (`cpk_...`)\n\nBot auto-detect agent & tampilkan semua info. /cancel untuk batal.",parse_mode="Markdown")
 
 async def cmd_stats(update,ctx):
     if not is_authorized(ctx): await reject_unauthorized(update); return
@@ -518,7 +515,7 @@ async def do_launch(update,ctx,api_key):
     await msg.edit_text(
         f"✅ Gambar uploaded!\n\n"
         f"⏳ Launching *{token['name']}* ke pump.fun via TOR...\n"
-        f"_(10–30 detik)_",parse_mode="Markdown")
+        f"_(10–60 detik)_",parse_mode="Markdown")
 
     result=await asyncio.get_event_loop().run_in_executor(None,api_launch_token,api_key,token,image_url)
     sc=result.get("_sc",0)
@@ -541,7 +538,13 @@ async def do_launch(update,ctx,api_key):
             parse_mode="Markdown",reply_markup=keyboard)
     elif sc==429:
         retry=result.get("retryAfterHours","?")
-        await msg.edit_text(f"⏳ *Rate Limit!*\n\nCoba lagi dalam *{retry} jam*.",parse_mode="Markdown")
+        tor_msg=(
+            "\n\n⚠️ *TOR tidak aktif* — request pakai IP Railway langsung.\n"
+            "Pastikan TOR berhasil start (cek Railway logs: harus ada `TOR ready!`)."
+        ) if result.get("_tor_inactive") else ""
+        await msg.edit_text(
+            f"⏳ *Rate Limit!*\n\nCoba lagi dalam *{retry} jam*.{tor_msg}",
+            parse_mode="Markdown")
     elif sc==401:
         await msg.edit_text("❌ *API Key tidak valid!*\n\nPastikan API key benar dari clawpump.tech",parse_mode="Markdown")
     elif sc==503:
@@ -558,18 +561,16 @@ async def do_launch(update,ctx,api_key):
 
 async def do_earnings(update,ctx,api_key):
     msg=await update.message.reply_text("🔍 *Auto-detecting agent dari API key...*",parse_mode="Markdown")
-
     portfolio=await asyncio.get_event_loop().run_in_executor(None,api_get_portfolio,api_key)
     sc=portfolio.get("_sc",0)
-
     if sc==401:
         await msg.edit_text("❌ *API Key tidak valid!*\n\nPastikan API key benar dari clawpump.tech",parse_mode="Markdown");return
     if sc==0 or "error" in portfolio:
         await msg.edit_text(f"❌ *Gagal connect ke ClawPump!*\n\n`{portfolio.get('error','Connection error')}`",parse_mode="Markdown");return
 
-    agent_id = portfolio.get("agentId") or portfolio.get("agent_id")
-    username = portfolio.get("username") or portfolio.get("name") or agent_id
-    wallet   = portfolio.get("walletAddress") or portfolio.get("wallet") or "N/A"
+    agent_id=portfolio.get("agentId") or portfolio.get("agent_id")
+    username=portfolio.get("username") or portfolio.get("name") or agent_id
+    wallet=portfolio.get("walletAddress") or portfolio.get("wallet") or "N/A"
 
     if not agent_id:
         await msg.edit_text(
@@ -579,18 +580,16 @@ async def do_earnings(update,ctx,api_key):
             parse_mode="Markdown",disable_web_page_preview=True);return
 
     await msg.edit_text(f"✅ Agent: `{agent_id}`\n\n⏳ Mengambil earnings...",parse_mode="Markdown")
-
     earnings=await asyncio.get_event_loop().run_in_executor(None,api_get_earnings,api_key,agent_id)
     esc=earnings.get("_sc",0)
-
     if esc==401 or (esc!=200 and "error" in earnings):
         await msg.edit_text(f"❌ *Gagal ambil earnings!*\n\n`{earnings.get('error','Error')}`",parse_mode="Markdown");return
 
-    total_earned  = earnings.get("totalEarned",0)
-    total_sent    = earnings.get("totalSent",0)
-    total_pending = earnings.get("totalPending",0)
-    total_held    = earnings.get("totalHeld",0)
-    tokens        = earnings.get("tokenBreakdown",[])
+    total_earned=earnings.get("totalEarned",0)
+    total_sent=earnings.get("totalSent",0)
+    total_pending=earnings.get("totalPending",0)
+    total_held=earnings.get("totalHeld",0)
+    tokens=earnings.get("tokenBreakdown",[])
 
     token_lines=""
     for t in tokens[:5]:
@@ -601,7 +600,6 @@ async def do_earnings(update,ctx,api_key):
         token_lines+=f"  • `{short}`\n    Collected: `{collected:.4f}` | Kamu: `{share:.4f}` SOL\n"
 
     wallet_display=f"`{wallet[:16]}...{wallet[-6:]}`" if len(wallet)>22 else f"`{wallet}`"
-
     text=(
         f"👤 *Detail Agent*\n\n"
         f"🆔 Agent ID: `{agent_id}`\n"
@@ -619,9 +617,7 @@ async def do_earnings(update,ctx,api_key):
         text+=f"\n📊 *Token Breakdown ({len(tokens)} token):*\n{token_lines}"
     text+="\n_Fee dikumpulkan tiap jam & otomatis ke wallet kamu._"
 
-    keyboard=InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Dashboard Agent",url=f"https://clawpump.tech/agent/{agent_id}")],
-    ])
+    keyboard=InlineKeyboardMarkup([[InlineKeyboardButton("📊 Dashboard Agent",url=f"https://clawpump.tech/agent/{agent_id}")]])
     await msg.edit_text(text,parse_mode="Markdown",reply_markup=keyboard)
 
 
