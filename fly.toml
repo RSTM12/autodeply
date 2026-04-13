@@ -1,0 +1,13 @@
+app = "clawpump-bot-rstm"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[processes]
+  app = "/bin/bash /app/start.sh"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
